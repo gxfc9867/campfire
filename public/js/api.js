@@ -54,8 +54,10 @@ export const api = {
     const q = new URLSearchParams({ chat: chatId, ...params });
     return request(`/api/messages?${q}`);
   },
-  send: (chatId, text, clientId) =>
-    request('/api/messages', { method: 'POST', body: { chat: chatId, text, clientId } }),
+  send: (chatId, text, clientId, quote = null) =>
+    request('/api/messages', { method: 'POST', body: { chat: chatId, text, clientId, quote } }),
+  editMessage: (id, text) => request(`/api/messages/${id}`, { method: 'PATCH', body: { text } }),
+  deleteMessage: (id) => request(`/api/messages/${id}`, { method: 'DELETE' }),
 
   status: (chatId) => request(`/api/status${chatId ? `?chat=${encodeURIComponent(chatId)}` : ''}`),
   jobs: (chatId) => request(`/api/jobs?chat=${encodeURIComponent(chatId)}`),

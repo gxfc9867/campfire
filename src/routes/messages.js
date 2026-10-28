@@ -1,8 +1,9 @@
-import { MAIN_CHAT, SENDER, JOB_STATUS } from '../constants.js';
+import { MAIN_CHAT, SENDER, JOB_STATUS, DRIVER } from '../constants.js';
 import { badRequest, notFound } from '../errors.js';
 import { readJson, sendJson, prepareStream, createLimiter, clientIp } from '../http/util.js';
 import { parseTargets } from '../targets.js';
 import { shortId } from '../id.js';
+import { deliverWebhook } from '../drivers/webhook.js';
 
 /**
  * 会话与消息。
@@ -15,11 +16,28 @@ export function registerMessageRoutes(router, ctx) {
   const log = ctx.log;
   const writeLimiter = createLimiter({ limit: 60, windowMs: 60_000 });
 
+  /** 一条消息在自己的会话链里属于第几跳（主人发起 = 0）。防互 @ 死循环的依据。 */
+  function chainDepth(message) {
+    let cur = message;
+    for (let d = 0; d < 6; d++) {
+      if (!cur) return d;
+      if (cur.sender === SENDER.user || cur.sender === SENDER.system) return d;
+      const prev = cur.replyTo ? store.getMessage(cur.replyTo) : null;
+      if (!prev) return d + 1;
+      cur = prev;
+    }
+    // 六跳还没到头，视为死循环链
+    return 99;
+  }
+
   /**
    * 把一条消息投递给被 @ 的成员。
    * 注意顺序：先落库、再建任务、最后才通知。任何一步失败都不该让消息消失。
+   *
+   * depth 限制成员之间的接力：主人 @ A，A 回 @ B（1 跳，允许），B 回 @ A（2 跳，
+   * 允许），A 再回 @ B（3 跳，停）。没有这条规则，两个互相客气的 agent 能烧一晚上。
    */
-  function fanout({ chatId, messageId, text, sender }) {
+  function fanout({ chatId, messageId, text, sender, maxDepth = 2 }) {
     const candidates = store
       .listMembersOf(chatId)
       .map((h) => members.get(h))
@@ -27,6 +45,21 @@ export function registerMessageRoutes(router, ctx) {
 
     const { targets } = parseTargets(text, candidates);
     const jobs = [];
+    const message = store.getMessage(messageId);
+    const depth = message ? chainDepth(message) : 0;
+    const chat = store.getChat(chatId);
+
+    if (depth > maxDepth) {
+      log.info(`接力深度 ${depth} 已达上限，@${targets.join(',') || '…'} 不再投递`);
+      store.insertMessage({
+        chatId,
+        sender: SENDER.system,
+        text: '成员之间的接力到此为止（已连续 3 跳），需要的话请主人亲自接话。',
+        meta: { kind: 'chain_stop' },
+      });
+      hub.emit('change', { type: 'message', chatId });
+      return jobs;
+    }
 
     for (const handle of targets) {
       const requestId = shortId('r_');
@@ -39,6 +72,16 @@ export function registerMessageRoutes(router, ctx) {
         expiresInMs: cfg.jobExpireMs,
       });
       jobs.push(job);
+
+      if (members.get(handle)?.driver.type === DRIVER.webhook) {
+        // webhook 型成员不会来轮询，直接推过去；回执方式见 drivers/webhook.js
+        deliverWebhook(ctx, job, members.get(handle), {
+          chatName: chat?.name || chatId,
+          senderName:
+            sender === SENDER.user ? '主人' : members.get(sender)?.display || sender,
+        });
+        continue;
+      }
 
       // 叫醒正挂着的长轮询：这一步就是「下发唤醒」，桥只通知，不执行任何命令
       waiters.notify(handle);
@@ -54,7 +97,7 @@ export function registerMessageRoutes(router, ctx) {
     return jobs;
   }
 
-  async function createAndDeliver({ chatId, sender, text, clientId, explicitTargets }) {
+  async function createAndDeliver({ chatId, sender, text, clientId, explicitTargets, replyTo = null }) {
     const chat = store.getChat(chatId);
     if (!chat) throw notFound('会话不存在');
 
@@ -68,7 +111,7 @@ export function registerMessageRoutes(router, ctx) {
       if (dup) return { message: dup, jobs: [] };
     }
 
-    const message = store.insertMessage({ chatId, sender, text: body, clientId });
+    const message = store.insertMessage({ chatId, sender, text: body, clientId, replyTo });
     store.touchChat(chatId);
 
     let jobs = [];
@@ -194,12 +237,19 @@ export function registerMessageRoutes(router, ctx) {
     async (req, res) => {
       if (writeLimiter(clientIp(req, cfg))) throw badRequest('发送过于频繁，请稍后再试', 'rate_limited');
       const body = await readJson(req, 128 * 1024);
+      // 引用：只做归属校验，不参与投递逻辑——它是给人看的上下文
+      let quote = null;
+      if (body.quote) {
+        const q = store.getMessage(String(body.quote));
+        if (q && q.chatId === (body.chat || MAIN_CHAT.id)) quote = q.id;
+      }
       const { message, jobs } = await createAndDeliver({
         chatId: body.chat || MAIN_CHAT.id,
         sender: SENDER.user,
         text: body.text,
         clientId: body.clientId,
         explicitTargets: body.targets,
+        replyTo: quote,
       });
       sendJson(res, 200, {
         message,
@@ -239,6 +289,34 @@ export function registerMessageRoutes(router, ctx) {
         meta: { kind: JOB_STATUS.cancelled, jobId: job.id },
       });
       hub.emit('change', { type: 'message', chatId: job.chatId });
+      sendJson(res, 200, { ok: true });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 主人改自己说的话。成员的产出是 agent 行为，不提供编辑。 */
+  router.patch(
+    /^\/api\/messages\/([A-Za-z0-9_-]{1,40})$/,
+    async (req, res, url, identity, id) => {
+      const body = await readJson(req, cfg.maxTextLength + 1024);
+      const text = String(body.text || '').trim();
+      if (!text) throw badRequest('内容不能为空');
+      if (text.length > cfg.maxTextLength) throw badRequest('消息过长');
+      const message = store.updateMessage(id, text);
+      if (!message) throw notFound('消息不存在或不可编辑');
+      hub.emit('change', { type: 'message', chatId: message.chatId, seq: message.seq });
+      sendJson(res, 200, { message });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 软删：正文清空，行保留（seq 不空洞）。任何消息都可删，包括成员的。 */
+  router.delete(
+    /^\/api\/messages\/([A-Za-z0-9_-]{1,40})$/,
+    (req, res, url, identity, id) => {
+      const message = store.deleteMessage(id);
+      if (!message) throw notFound('消息不存在');
+      hub.emit('change', { type: 'message', chatId: message.chatId, seq: message.seq });
       sendJson(res, 200, { ok: true });
     },
     { auth: 'owner' },

@@ -41,6 +41,7 @@ const state = {
   mentionItems: [],
   mentionQuery: '',
   awayCount: 0, // 窗口不在前台期间攒下的新消息数，回到前台清零
+  quoting: null, // 正在引用回复的消息
 };
 
 const BASE = api.base;
@@ -191,6 +192,68 @@ function bindChrome() {
     },
     { passive: true },
   );
+
+  // 会话的右键菜单：改名 / 删除。主会话服务端会拒绝，这里也提前挡一下
+  $('#chat-list').addEventListener('contextmenu', async (e) => {
+    const item = e.target.closest('.chat-item');
+    if (!item) return;
+    e.preventDefault();
+    const chat = state.chats.find((c) => c.id === item.dataset.chat);
+    if (!chat) return;
+
+    const act = menuChoice(e.clientX, e.clientY, ['重命名', chat.id === 'main' ? null : '删除会话']);
+    if (act === '重命名') {
+      const name = prompt('新名称', chat.name);
+      if (!name?.trim() || name === chat.name) return;
+      try {
+        await api.renameChat(chat.id, name.trim());
+        loadChats();
+      } catch (ex) {
+        toast(ex.message);
+      }
+    } else if (act === '删除会话') {
+      if (!confirm(`删除「${chat.name}」？消息一并隐藏，不可恢复。`)) return;
+      try {
+        await api.deleteChat(chat.id);
+        if (state.chatId === chat.id) selectChat('main');
+        loadChats();
+      } catch (ex) {
+        toast(ex.message);
+      }
+    }
+  });
+
+  $('#btn-clear-quote').addEventListener('click', clearQuote);
+}
+
+/** 极简右键菜单：一个临时浮层，点别处就消失。 */
+function menuChoice(x, y, options) {
+  return new Promise((resolve) => {
+    const menu = document.createElement('div');
+    menu.className = 'ctx-menu';
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    for (const opt of options) {
+      if (!opt) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = opt;
+      b.addEventListener('click', () => {
+        done(opt);
+      });
+      menu.append(b);
+    }
+    document.body.append(menu);
+    const close = () => done(null);
+    function done(v) {
+      menu.remove();
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+      resolve(v);
+    }
+    setTimeout(() => document.addEventListener('click', close, { once: false }), 0);
+    document.addEventListener('contextmenu', close);
+  });
 }
 
 // ── 会话 ────────────────────────────────────────────────────────────
@@ -219,6 +282,7 @@ function renderChats() {
   for (const c of shown) {
     const btn = document.createElement('button');
     btn.className = `chat-item${c.id === state.chatId ? ' is-active' : ''}`;
+    btn.dataset.chat = c.id; // 右键菜单靠这个定位，别用名字匹配（名字会转义）
     const preview = c.last
       ? `${c.last.sender === 'user' ? '你' : nameOf(c.last.sender)}：${c.last.text}`
       : '还没有消息';
@@ -527,15 +591,37 @@ function buildMessage(m) {
 
   const block = document.createElement('div');
   block.className = 'msg-block';
+
+  // 被引用的原消息：在本会话已加载的消息里找，找不到就退化为一条摘要
+  const quoted = m.replyTo ? state.messages.find((x) => x.id === m.replyTo) : null;
+
   block.innerHTML =
     `<div class="msg-meta">` +
     `<span class="msg-name">${esc(isMe ? '你' : member.display)}</span>` +
     (isMe ? '' : `<span class="msg-handle">@${esc(m.sender)}</span>`) +
     `<span class="msg-time">${fmtTime(m.createdAt)}</span>` +
+    (m.meta?.edited ? '<span class="msg-edited">已编辑</span>' : '') +
     `</div>` +
-    `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`;
+    (quoted
+      ? `<button type="button" class="msg-quote" data-jump="${esc(quoted.id)}">` +
+        `<b>${esc(nameOf(quoted.sender))}</b>${esc(String(quoted.text).slice(0, 80))}` +
+        `</button>`
+      : '') +
+    (m.meta?.deleted
+      ? '<div class="msg-text msg-deleted">消息已删除</div>'
+      : `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`);
 
-  // 悬浮操作：@ 它 / 复制原文
+  if (quoted) {
+    block.querySelector('.msg-quote')?.addEventListener('click', () => {
+      const el = $(`#messages .msg[data-id="${quoted.id}"]`);
+      if (!el) return toast('原消息不在当前视图里');
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('is-flash');
+      setTimeout(() => el.classList.remove('is-flash'), 1500);
+    });
+  }
+
+  // 悬浮操作：@ 它 / 引用 / 编辑或删除 / 复制
   const ops = document.createElement('div');
   ops.className = 'msg-ops';
   if (!isMe) {
@@ -551,6 +637,36 @@ function buildMessage(m) {
     });
     ops.append(at);
   }
+
+  ops.append(opButton('引用', () => startQuote(m)));
+
+  if (isMe && !m.meta?.deleted) {
+    ops.append(
+      opButton('编辑', async () => {
+        const next = prompt('修改这条消息', m.text);
+        if (next === null || !next.trim() || next === m.text) return;
+        try {
+          await api.editMessage(m.id, next.trim());
+          loadMessages();
+        } catch (ex) {
+          toast(ex instanceof ApiError ? ex.message : '修改失败');
+        }
+      }),
+    );
+  }
+
+  ops.append(
+    opButton('删除', async () => {
+      if (!confirm('删除这条消息？正文会清空，位置保留。')) return;
+      try {
+        await api.deleteMessage(m.id);
+        loadMessages();
+      } catch (ex) {
+        toast(ex instanceof ApiError ? ex.message : '删除失败');
+      }
+    }),
+  );
+
   const copy = document.createElement('button');
   copy.type = 'button';
   copy.className = 'msg-op';
@@ -570,11 +686,30 @@ function buildMessage(m) {
   return wrap;
 }
 
-/**
- * 把正文渲染成 HTML。
- * 转义、markdown、@ 染色全部在 markdown.js 里按「先转义后解析」的顺序完成，
- * 这里不再自己做一遍，避免两处规则漂移。
- */
+function opButton(label, fn) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'msg-op';
+  b.textContent = label;
+  b.addEventListener('click', fn);
+  return b;
+}
+
+// ── 引用回复 ─────────────────────────────────────────────────────────
+
+function startQuote(m) {
+  state.quoting = m;
+  const bar = $('#quote-bar');
+  bar.hidden = false;
+  $('#quote-who').textContent = nameOf(m.sender);
+  $('#quote-text').textContent = String(m.text).replace(/\s+/g, ' ').slice(0, 80);
+  $('#input').focus();
+}
+
+function clearQuote() {
+  state.quoting = null;
+  $('#quote-bar').hidden = true;
+}
 
 function scrollToBottom(instant = false) {
   const box = $('#messages');
@@ -617,7 +752,8 @@ function bindComposer() {
       e.preventDefault();
       pickMention(state.mentionItems[state.mentionIndex]);
     } else if (e.key === 'Escape') {
-      closeMentionMenu();
+      if (state.quoting) clearQuote();
+      else closeMentionMenu();
     }
   });
 
@@ -631,9 +767,11 @@ function bindComposer() {
     if (!text) return;
     send.disabled = true;
     const clientId = crypto.randomUUID();
+    const quote = state.quoting?.id || null;
     try {
-      const res = await api.send(state.chatId, text, clientId);
+      const res = await api.send(state.chatId, text, clientId, quote);
       input.value = '';
+      clearQuote();
       autosize();
       appendMessage(res.message);
       hintWaking(res.jobs);
@@ -787,12 +925,18 @@ function renderMembersPanel() {
 
 async function loadJobs() {
   try {
-    const { jobs } = await api.jobs(state.chatId);
+    const [{ jobs }, st] = await Promise.all([
+      api.jobs(state.chatId),
+      api.status(state.chatId).catch(() => null),
+    ]);
     const box = $('#panel-jobs');
     box.textContent = '';
     const title = document.createElement('p');
     title.className = 'panel-title';
-    title.innerHTML = `<span>最近投递</span><span class="list-count">${jobs.length}</span>`;
+    // 连接数读数：成员多了以后，用户需要知道当前挂着几条长轮询
+    title.innerHTML =
+      `<span>最近投递</span>` +
+      `<span class="list-count">${jobs.length} 条 · 长轮询 ${st?.counts?.polls ?? '—'}</span>`;
     box.append(title);
 
     if (!jobs.length) {

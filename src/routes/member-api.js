@@ -129,6 +129,15 @@ export function registerMemberRoutes(router, ctx) {
       store.touchChat(job.chatId);
       hub.emit('change', { type: 'message', chatId: job.chatId, seq: message.seq });
 
+      // 成员回复里 @ 了别的成员：允许接力，深度限制由 fanout 把关（3 跳封顶）
+      if (text.includes('@') && typeof ctx.fanout === 'function') {
+        try {
+          ctx.fanout({ chatId: job.chatId, messageId: message.id, text, sender: handle });
+        } catch (e) {
+          log.warn(`接力投递失败：${e.message}`);
+        }
+      }
+
       log.debug(`${handle} 回执 ${requestId}`);
       sendJson(res, 200, { ok: true, message });
     },

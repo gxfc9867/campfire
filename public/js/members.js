@@ -32,6 +32,7 @@ function bind() {
   $('#btn-close-connect').addEventListener('click', () => closeConnect());
   $('#btn-reveal-key').addEventListener('click', toggleKey);
   $('#btn-rotate-key').addEventListener('click', rotateKey);
+  $('#btn-probe').addEventListener('click', probeMember);
   $$('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copyBlock(btn)));
 
   $$('input[name="driverType"]').forEach((r) =>
@@ -120,6 +121,40 @@ function renderGrid() {
 
     card.append(hit, wire);
     grid.append(card);
+  }
+}
+
+// ── 测试连接 ─────────────────────────────────────────────────────────
+
+/**
+ * 桥侧自检：这个成员的通道到底通不通。
+ * 只查服务端掌握的事实（sidecar 在不在、上次活跃时间、唤醒决策），
+ * 不真的拉起进程——真跑一次命令是「深度测试」，交给 doctor。
+ */
+async function probeMember() {
+  const handle = state.editing;
+  if (!handle) return;
+  const btn = $('#btn-probe');
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  try {
+    const r = await api.probeMember(handle);
+    const seen = r.lastSeenAt ? new Date(r.lastSeenAt).toLocaleTimeString() : '从未';
+    const stateText = { hot: '长轮询挂起中', warm: '低频轮询', cold: '离线', wake: '唤醒中' }[r.state] || r.state;
+    alert(
+      `成员 ${handle}（${r.driverType}）\n\n` +
+        `通道：${r.reachable ? '已连接' : '未连接'}\n` +
+        `状态：${stateText}\n` +
+        `可立即响应：${r.ready ? '是' : '否'}\n` +
+        `最近活跃：${seen}\n` +
+        `全局连接：长轮询 ${r.polls} 条\n\n` +
+        `${r.hint}`,
+    );
+  } catch (ex) {
+    toast(ex instanceof ApiError ? ex.message : '测试失败');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '测试连接';
   }
 }
 
@@ -278,6 +313,7 @@ async function openEditor(handle) {
   $('#editor-error').hidden = true;
   $('#editor-title').textContent = handle ? '编辑成员' : '新建成员';
   $('#btn-archive').hidden = !handle;
+  $('#btn-probe').hidden = !handle;
   state.editing = handle;
   state.drafts = {};
 

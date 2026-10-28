@@ -227,6 +227,29 @@ export class Store {
     return row ? mapMessage(row) : null;
   }
 
+  /** 主人改自己说过的话。成员的产出是 agent 的行为，不允许事后篡改。 */
+  updateMessage(id, text) {
+    const msg = this.getMessage(id);
+    if (!msg) return null;
+    if (msg.sender !== 'user') return null;
+    const meta = { ...(msg.meta || {}), edited: true };
+    this.db
+      .prepare('UPDATE messages SET text = ?, meta = ? WHERE id = ?')
+      .run(text, JSON.stringify(meta), id);
+    return this.getMessage(id);
+  }
+
+  /** 软删：正文清空但行还在，seq 游标不空洞，历史翻页不会错位。 */
+  deleteMessage(id) {
+    const msg = this.getMessage(id);
+    if (!msg) return null;
+    const meta = { ...(msg.meta || {}), deleted: true };
+    this.db
+      .prepare("UPDATE messages SET text = '', meta = ? WHERE id = ?")
+      .run(JSON.stringify(meta), id);
+    return this.getMessage(id);
+  }
+
   /**
    * 按 seq 游标拉消息。
    * after 用于追新，before 用于往前翻历史，两者互斥（同时给时以 after 为准）。

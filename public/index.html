@@ -107,6 +107,13 @@
         <div class="messages" id="messages" aria-live="polite"></div>
 
         <form class="composer" id="composer" autocomplete="off">
+          <div class="quote-bar" id="quote-bar" hidden>
+            <span class="quote-label">引用 <b id="quote-who"></b></span>
+            <span class="quote-text" id="quote-text"></span>
+            <button type="button" class="icon-btn sm" id="btn-clear-quote" aria-label="取消引用">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+            </button>
+          </div>
           <div class="mention-menu" id="mention-menu" hidden></div>
           <div class="composer-box">
             <textarea id="input" rows="1" placeholder="说点什么，@ 可以叫醒成员" aria-label="消息输入"></textarea>
@@ -264,6 +271,7 @@
             <p class="form-error" id="editor-error" hidden></p>
 
             <div class="editor-foot">
+              <button type="button" class="text-btn" id="btn-probe" hidden>测试连接</button>
               <button type="button" class="text-btn danger" id="btn-archive" hidden>移出并归档</button>
               <span class="spacer"></span>
               <button type="button" class="text-btn" id="btn-cancel-edit">取消</button>
