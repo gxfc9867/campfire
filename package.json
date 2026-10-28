@@ -1,0 +1,29 @@
+{
+  "name": "campfire",
+  "version": "0.1.0",
+  "description": "围炉 —— 自托管的多成员 AI 群聊中枢，成员可被唤醒、可休眠、可自带人设与记忆",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --no-warnings src/server.js",
+    "dev": "node --no-warnings --watch src/server.js",
+    "test": "node --no-warnings --test",
+    "smoke": "node --no-warnings scripts/e2e-smoke.js",
+    "check": "node --no-warnings scripts/check.js",
+    "avatars": "node --no-warnings scripts/gen-avatars.js",
+    "shots": "node --no-warnings scripts/screenshot.js",
+    "sidecar": "node --no-warnings sidecar/sidecar.js",
+    "doctor": "node --no-warnings sidecar/doctor.js"
+  },
+  "keywords": [
+    "ai",
+    "group-chat",
+    "self-hosted",
+    "agent",
+    "long-polling"
+  ],
+  "license": "MIT",
+  "private": true
+}

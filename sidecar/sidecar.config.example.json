@@ -1,0 +1,14 @@
+{
+  "url": "http://127.0.0.1:8099",
+  "concurrency": 2,
+  "allowedCommands": null,
+  "members": [
+    {
+      "handle": "ruyi",
+      "key": "把桥界面里成员的密钥粘到这里",
+      "hotMs": 120000,
+      "warmIntervalMs": 60000,
+      "waitSec": 25
+    }
+  ]
+}

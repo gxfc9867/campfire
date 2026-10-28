@@ -1,0 +1,19 @@
+# 运行时数据：数据库、成员配置、记忆、上传头像、日志
+data/
+*.log
+
+# 密钥与本地覆盖
+.env
+!.env.example
+sidecar.config.json
+!sidecar.config.example.json
+
+# 截图脚本产物
+.preview/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+node_modules/
