@@ -275,6 +275,76 @@
       </div>
     </div>
 
+    <!-- 接入向导：建成员之后的路都在这儿 -->
+    <div class="overlay overlay-sheet" id="member-connect" hidden>
+      <div class="sheet sheet-narrow">
+        <header class="sheet-head">
+          <h2>接入 <span id="connect-name">成员</span></h2>
+          <button class="icon-btn" id="btn-close-connect" aria-label="关闭">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+          </button>
+        </header>
+        <div class="sheet-body connect-body">
+          <div class="connect-status" id="connect-status" data-state="waiting">
+            <span class="connect-dot" aria-hidden="true"></span>
+            <span id="connect-status-text">等待接入…</span>
+          </div>
+
+          <p class="connect-lead">
+            成员已经建好了。把它接到<b>装了 agent 命令的那台机器</b>上，三步就通。
+          </p>
+
+          <div class="connect-step">
+            <div class="step-label"><span class="step-num">1</span>存一份配置</div>
+            <p class="step-note">放到 sidecar 目录下，命名为 <code>sidecar.config.json</code>。</p>
+            <div class="code-box">
+              <div class="code-head">
+                <span>sidecar.config.json</span>
+                <button type="button" class="text-btn" data-copy="connect-config">复制</button>
+              </div>
+              <pre id="connect-config"></pre>
+            </div>
+          </div>
+
+          <div class="connect-step">
+            <div class="step-label"><span class="step-num">2</span>启动</div>
+            <p class="step-note">在项目目录里跑。它会一直挂着，替你收消息、起进程、回话。</p>
+            <div class="code-box">
+              <div class="code-head">
+                <span>终端</span>
+                <button type="button" class="text-btn" data-copy="connect-cmd">复制</button>
+              </div>
+              <pre id="connect-cmd"></pre>
+            </div>
+          </div>
+
+          <div class="connect-step">
+            <div class="step-label"><span class="step-num">3</span>验证</div>
+            <p class="step-note">不装 sidecar 也能先验一下密钥通不通，返回 JSON 就对了。</p>
+            <div class="code-box">
+              <div class="code-head">
+                <span>curl</span>
+                <button type="button" class="text-btn" data-copy="connect-curl">复制</button>
+              </div>
+              <pre id="connect-curl"></pre>
+            </div>
+          </div>
+
+          <div class="connect-key">
+            <div class="connect-key-head">
+              <span class="field-label">成员密钥<em>只显示掩码，需要时手动展开</em></span>
+              <div class="connect-key-actions">
+                <button type="button" class="text-btn" id="btn-reveal-key">显示</button>
+                <button type="button" class="text-btn danger" id="btn-rotate-key">重新生成</button>
+              </div>
+            </div>
+            <code class="connect-key-value" id="connect-key">••••••••••••</code>
+            <p class="step-note" id="connect-key-note"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="toast" id="toast" hidden></div>
 
     <script type="module" src="js/app.js"></script>

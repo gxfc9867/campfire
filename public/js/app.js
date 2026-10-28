@@ -12,6 +12,7 @@ import {
   presenceLabel,
 } from './ui.js';
 import { initMembers } from './members.js';
+import { renderMarkdown } from './markdown.js';
 
 /**
  * 前端主逻辑。
@@ -418,7 +419,7 @@ function buildMessage(m) {
     (isMe ? '' : `<span class="msg-handle">@${esc(m.sender)}</span>`) +
     `<span class="msg-time">${fmtTime(m.createdAt)}</span>` +
     `</div>` +
-    `<div class="msg-text">${highlightMentions(m.text)}</div>`;
+    `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`;
 
   // 悬浮操作：@ 它 / 复制原文
   const ops = document.createElement('div');
@@ -456,40 +457,10 @@ function buildMessage(m) {
 }
 
 /**
- * 把正文里的 @ 提及染成强调色。
- * 先转义再匹配，避免把用户内容当 HTML；成员名按最长匹配，避免 @如 吃掉 @如意。
+ * 把正文渲染成 HTML。
+ * 转义、markdown、@ 染色全部在 markdown.js 里按「先转义后解析」的顺序完成，
+ * 这里不再自己做一遍，避免两处规则漂移。
  */
-function highlightMentions(text) {
-  const raw = esc(text);
-  const dict = [];
-  for (const m of state.members) {
-    for (const k of [m.handle, m.display, ...(m.aliases || [])]) {
-      if (k) dict.push({ member: m, key: k });
-    }
-  }
-  dict.sort((a, b) => b.key.length - a.key.length);
-
-  let out = '';
-  let i = 0;
-  while (i < raw.length) {
-    const at = raw.indexOf('@', i);
-    if (at === -1) {
-      out += raw.slice(i);
-      break;
-    }
-    out += raw.slice(i, at);
-    const rest = raw.slice(at + 1);
-    const hit = dict.find((d) => rest.toLowerCase().startsWith(d.key.toLowerCase()));
-    if (hit) {
-      out += `<span class="msg-mention">@${esc(hit.member.display)}</span>`;
-      i = at + 1 + hit.key.length;
-    } else {
-      out += '@';
-      i = at + 1;
-    }
-  }
-  return out;
-}
 
 function scrollToBottom(instant = false) {
   const box = $('#messages');

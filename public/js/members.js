@@ -11,6 +11,9 @@ import { $, $$, esc, avatarUrl, initialAvatar, fmtRelative, toast, presenceLabel
 let onChanged = () => {};
 let state = { members: [], etag: '', chats: [], presets: [], editing: null, drafts: {} };
 
+/** 接入向导的会话状态。key 加下划线前缀表示「只在此处流转，不进持久层」。 */
+let connect = { handle: '', key: '', name: '', timer: null, shown: false };
+
 export function initMembers({ onChanged: cb } = {}) {
   onChanged = cb || (() => {});
   bind();
@@ -26,6 +29,11 @@ function bind() {
   $('#btn-roll-avatar').addEventListener('click', rollAvatar);
   $('#editor-form').addEventListener('submit', save);
 
+  $('#btn-close-connect').addEventListener('click', () => closeConnect());
+  $('#btn-reveal-key').addEventListener('click', toggleKey);
+  $('#btn-rotate-key').addEventListener('click', rotateKey);
+  $$('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copyBlock(btn)));
+
   $$('input[name="driverType"]').forEach((r) =>
     r.addEventListener('change', () => syncDriverFields()),
   );
@@ -33,6 +41,7 @@ function bind() {
   // 备注名变化时实时更新预览头像上的字
   $('#editor-form').elements.display?.addEventListener('input', updateAvatarPreview);
 }
+
 
 async function open() {
   $('#members-view').hidden = false;
@@ -70,9 +79,10 @@ function renderGrid() {
   }
 
   for (const m of state.members) {
-    const card = document.createElement('button');
+    // 卡片主体和「接入信息」是两个独立按钮，所以外层必须是 div 而不是 button——
+    // HTML 不允许按钮嵌套按钮，否则点击内层会同时触发外层。
+    const card = document.createElement('div');
     card.className = 'member-card';
-    card.type = 'button';
 
     const img = document.createElement('img');
     img.src = avatarUrl(m, api.base);
@@ -80,7 +90,6 @@ function renderGrid() {
     const av = document.createElement('div');
     av.className = 'msg-avatar';
     av.append(img);
-    card.append(av);
 
     const label = presenceLabel(m.presence, m.driverType);
     const main = document.createElement('div');
@@ -96,13 +105,172 @@ function renderGrid() {
       `<span>${m.chats.length} 个会话</span>` +
       `<span>记忆 ${m.memory?.chars ? `${m.memory.chars} 字` : '空'}</span>` +
       `</div>`;
-    card.append(main);
-    card.addEventListener('click', () => openEditor(m.handle));
+
+    const hit = document.createElement('button');
+    hit.type = 'button';
+    hit.className = 'member-card-hit';
+    hit.append(av, main);
+    hit.addEventListener('click', () => openEditor(m.handle));
+
+    const wire = document.createElement('button');
+    wire.type = 'button';
+    wire.className = 'text-btn member-card-wire';
+    wire.textContent = label.cls === 'ok' ? '接入信息' : '接入引导';
+    wire.addEventListener('click', () => openConnect(m.handle));
+
+    card.append(hit, wire);
     grid.append(card);
   }
 }
 
+
+// ── 接入向导 ─────────────────────────────────────────────────────────
+
+/**
+ * 建成员和「让它跑起来」是两件事，之前只有前者。这个弹层负责后者：
+ * 给出可直接复制的配置与命令，并且实时盯着成员有没有连上来。
+ */
+async function openConnect(handle, key) {
+  const member = state.members.find((m) => m.handle === handle);
+  connect = { handle, key: key || '', name: member?.display || handle, timer: null, shown: false };
+
+  $('#connect-name').textContent = connect.name;
+  $('#member-connect').hidden = false;
+  setConnectState('waiting', member?.presence?.reachable ? '正在确认状态…' : '等待 sidecar 连上来…');
+
+  // 密钥可能没随列表下发明文，单独取一次；失败就留空让用户点「显示」重试
+  if (!connect.key) {
+    try {
+      const res = await api.member(handle);
+      connect.key = res.key || '';
+      if (res.member) state.etag = res.etag || state.etag;
+    } catch {
+      // 取不到不影响展示配置骨架
+    }
+  }
+
+  renderConnect();
+  pollConnect();
+}
+
+function closeConnect() {
+  if (connect.timer) clearTimeout(connect.timer);
+  connect = { handle: '', key: '', name: '', timer: null, shown: false };
+  $('#member-connect').hidden = true;
+  // 从「新建」流程进来的，关掉接入页才算真正结束，此时回到列表
+  if (!$('#member-editor').hidden) closeEditor();
+  reload();
+  onChanged();
+}
+
+function renderConnect() {
+  const base = publicBase();
+  const key = connect.key || 'YOUR_KEY';
+  const cfg = { url: base, members: [{ handle: connect.handle, key }] };
+
+  $('#connect-config').textContent = JSON.stringify(cfg, null, 2);
+  $('#connect-cmd').textContent = 'node sidecar/sidecar.js';
+  $('#connect-curl').textContent =
+    `curl -s -H "X-Campfire-Member: ${connect.handle}" ` +
+    `-H "X-Campfire-Key: ${key}" ` +
+    `"${base}/api/agent/profile"`;
+  $('#connect-key').textContent = connect.shown ? key : mask(connect.key);
+  $('#btn-reveal-key').textContent = connect.shown ? '隐藏' : '显示';
+  $('#connect-key-note').textContent = connect.shown
+    ? '密钥等同这个成员的身份，别贴进公开仓库。'
+    : '密钥默认打码，展开后可复制。换机器或重装时用得上。';
+}
+
+function publicBase() {
+  return `${location.origin}${api.base || ''}`;
+}
+
+function mask(key) {
+  if (!key) return '••••••••••••';
+  return `${key.slice(0, 4)}${'•'.repeat(Math.max(6, key.length - 6))}${key.slice(-2)}`;
+}
+
+function setConnectState(stateName, text) {
+  $('#connect-status').dataset.state = stateName;
+  $('#connect-status-text').textContent = text;
+}
+
+/** 每 2.5 秒问一次这个成员在不在，连上就停。最多盯 5 分钟，避免弹层开着一直打请求。 */
+function pollConnect() {
+  const handle = connect.handle;
+  let tries = 0;
+
+  const tick = async () => {
+    if (connect.handle !== handle) return;
+    tries += 1;
+    try {
+      const { member } = await api.member(handle);
+      if (connect.handle !== handle) return;
+      if (member.presence?.reachable) {
+        const ready = member.presence?.ready;
+        setConnectState('online', ready ? '已接入 · 正在待命' : '已接入 · 可唤醒');
+        return;
+      }
+    } catch {
+      // 轮询失败不打扰用户，下一轮继续
+    }
+    if (tries >= 120) {
+      setConnectState('waiting', '还没检测到连接。检查 sidecar 日志里的地址与密钥，或点「显示」核对一遍');
+      return;
+    }
+    connect.timer = setTimeout(tick, 2500);
+  };
+
+  connect.timer = setTimeout(tick, 800);
+}
+
+async function toggleKey() {
+  if (!connect.key) {
+    try {
+      const res = await api.member(connect.handle);
+      connect.key = res.key || '';
+    } catch (ex) {
+      return toast(ex instanceof ApiError ? ex.message : '取不到密钥');
+    }
+  }
+  connect.shown = !connect.shown;
+  renderConnect();
+}
+
+async function rotateKey() {
+  const ok = confirm(
+    `重新生成后，旧密钥立刻失效。\n\n` +
+      `已经在跑的 sidecar 会断开连接，必须把新密钥写进配置再重启。\n\n确定继续吗？`,
+  );
+  if (!ok) return;
+  try {
+    const res = await api.rotateKey(connect.handle);
+    connect.key = res.key;
+    connect.shown = true;
+    renderConnect();
+    setConnectState('waiting', '密钥已更换，等待用新密钥的 sidecar 连上来…');
+    pollConnect();
+    toast('新密钥已生成，配置里的 key 需要更新');
+  } catch (ex) {
+    toast(ex instanceof ApiError ? ex.message : '重新生成失败');
+  }
+}
+
+async function copyBlock(btn) {
+  const target = document.getElementById(btn.dataset.copy);
+  const text = target?.textContent || '';
+  try {
+    await navigator.clipboard.writeText(text);
+    const old = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => (btn.textContent = old), 1400);
+  } catch {
+    toast('浏览器不允许自动复制，请手动选中');
+  }
+}
+
 // ── 编辑 ────────────────────────────────────────────────────────────
+
 
 async function openEditor(handle) {
   const form = $('#editor-form');
@@ -271,37 +439,36 @@ async function save(e) {
   btn.disabled = true;
   try {
     let saved;
+    let freshKey = '';
     if (state.editing) {
       saved = await api.updateMember(handle, payload, state.etag);
     } else {
       saved = await api.createMember(payload);
-      if (saved.key) {
-        // 密钥只在这里出现一次，给用户一个复制入口
-        const copy = confirm(
-          `成员已创建。\n\n密钥（只显示这一次，请立刻保存到 sidecar 配置里）：\n${saved.key}\n\n要复制到剪贴板吗？`,
-        );
-        if (copy) navigator.clipboard?.writeText(saved.key).then(() => toast('密钥已复制'));
-      }
+      freshKey = saved.key || '';
     }
-    // 记忆摘要单独写，避免和配置写入互相覆盖
-    const digest = form.elements.digest.value.trim();
-    if (digest) {
-      await fetch(`${api.base}/api/members/${handle}/memory`, {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ digest }),
-      });
-    }
-    toast(state.editing ? '已保存' : `已加入 ${saved.member?.display || display}`);
+
+    // 记忆摘要单独写，避免和配置写入互相覆盖。
+    // 这里必须无条件写：留空代表「清空记忆」，写成 if (digest) 会导致记忆永远删不掉。
+    await api.saveMemory(handle, form.elements.digest.value.trim());
+
     await reload();
     onChanged();
-    closeEditor();
+
+    if (state.editing) {
+      toast('已保存');
+      closeEditor();
+    } else {
+      // 新建成功不在这里收尾：密钥和「接下来怎么接」都在接入向导里，
+      // 用 confirm 弹一次密钥、点取消就永久丢失，是之前最大的一个坑。
+      closeEditor();
+      openConnect(handle, freshKey);
+    }
   } catch (ex) {
     fail(ex instanceof ApiError ? ex.message : '保存失败');
   } finally {
     btn.disabled = false;
   }
+
 
   function fail(msg) {
     err.textContent = msg;

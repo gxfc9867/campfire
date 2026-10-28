@@ -68,6 +68,8 @@ export const api = {
     request(`/api/members/${handle}`, { method: 'DELETE', headers: { 'If-Match': etag } }),
   rotateKey: (handle) => request(`/api/members/${handle}/rotate`, { method: 'POST' }),
   probeMember: (handle) => request(`/api/members/${handle}/probe`, { method: 'POST' }),
+  saveMemory: (handle, digest) =>
+    request(`/api/members/${handle}/memory`, { method: 'PUT', body: { digest } }),
   avatars: () => request('/api/avatars'),
 
   /** SSE 只用来「叫醒」，真实数据仍然靠上面的增量接口。 */

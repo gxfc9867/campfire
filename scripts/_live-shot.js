@@ -147,13 +147,22 @@ try {
 
   await shot(cdp, 'live-chat');
 
-  // 成员管理页
+  // 成员管理页：必须精确匹配「成员管理」，否则会误点到右侧栏的「成员」tab
   await cdp.send('Runtime.evaluate', {
-    expression: `(()=>{const b=[...document.querySelectorAll('a,button')].find(e=>/成员/.test(e.textContent));if(b){b.click();return 'clicked'}return 'not found'})()`,
+    expression: `(()=>{const b=document.getElementById('btn-members')||[...document.querySelectorAll('a,button')].find(e=>/成员管理/.test(e.textContent));if(b){b.click();return 'clicked'}return 'not found'})()`,
     returnByValue: true,
   });
   await sleep(1200);
   await shot(cdp, 'live-members');
+
+  // 接入向导：点第一张卡片的「接入引导」
+  const wire = await cdp.send('Runtime.evaluate', {
+    expression: `(()=>{const b=document.querySelector('.member-card-wire');if(!b)return 'not found';b.click();return JSON.stringify({overlay:document.getElementById('member-connect')?.hidden,err:document.getElementById('connect-status-text')?.textContent})})()`,
+    returnByValue: true,
+  });
+  console.log('接入点击:', wire.result?.value);
+  await sleep(1500);
+  await shot(cdp, 'live-connect');
 
   chrome.kill();
   fs.rmSync(profileDir, { recursive: true, force: true });
