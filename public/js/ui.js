@@ -29,7 +29,8 @@ export function firstChar(name) {
  * 用 SVG data URI 而非 canvas：分辨率无损、可缓存、深浅主题下都不糊。
  */
 export function initialAvatar(display, handle, salt = 0) {
-  const hue = hueOf(`${handle}:${salt}`);
+  // 主人固定用品牌橙，和成员的随机色区分开
+  const hue = handle === 'user' ? 16 : hueOf(`${handle}:${salt}`);
   const bg = `hsl(${hue} 58% 46%)`;
   const ch = esc(firstChar(display));
   const svg =

@@ -10,83 +10,151 @@
   </head>
   <body>
     <div class="app" id="app" hidden>
-      <!-- 侧栏：会话列表 -->
+      <!-- ① 图标栏：只有图标，最窄 -->
+      <nav class="rail" aria-label="主导航">
+        <div class="rail-logo" title="围炉">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3c2.6 3 4 5.2 4 7.6a4 4 0 0 1-8 0C8 8.2 9.4 6 12 3Z" />
+            <path d="M8 14a4 4 0 0 0 8 0" />
+          </svg>
+        </div>
+        <button class="rail-btn is-active" id="rail-chat" title="消息" aria-label="消息">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M4 4h12v9H8l-4 3V4Z" />
+          </svg>
+        </button>
+        <button class="rail-btn" id="btn-members-rail" title="成员" aria-label="成员">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8" cy="7" r="3" />
+            <path d="M2.5 16c.6-2.6 2.8-4 5.5-4s4.9 1.4 5.5 4" />
+            <path d="M14 6.5a2.6 2.6 0 0 1 0 5M15.5 16c-.2-1.4-.7-2.5-1.5-3.2" />
+          </svg>
+        </button>
+        <div class="rail-gap"></div>
+        <button class="rail-btn" id="btn-theme" title="切换主题" aria-label="切换主题">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="4" />
+            <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4" />
+          </svg>
+        </button>
+        <button class="rail-btn" id="btn-logout" title="退出" aria-label="退出">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M8 3H4v14h4M12 6l4 4-4 4M16 10H8" />
+          </svg>
+        </button>
+      </nav>
+
+      <!-- ② 会话栏 -->
       <aside class="sidebar">
         <header class="sidebar-head">
           <div class="brand">
-            <span class="brand-mark" aria-hidden="true"></span>
             <span class="brand-name">围炉</span>
+            <span class="brand-tag">campfire</span>
           </div>
           <button class="icon-btn" id="btn-new-chat" title="新建会话" aria-label="新建会话">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
           </button>
         </header>
+
+        <label class="search-box">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="9" cy="9" r="5.5" /><path d="M13 13l4 4" />
+          </svg>
+          <input id="chat-search" type="search" placeholder="搜索会话" aria-label="搜索会话" />
+        </label>
+
+        <div class="list-label">
+          <span>群聊</span>
+          <span class="list-count" id="chat-count"></span>
+        </div>
+
         <nav class="chat-list" id="chat-list" aria-label="会话列表"></nav>
+
         <footer class="sidebar-foot">
-          <button class="text-btn" id="btn-members">成员管理</button>
-          <button class="icon-btn" id="btn-theme" title="切换主题" aria-label="切换主题">
+          <button class="ghost-btn" id="btn-members">
             <svg viewBox="0 0 20 20" aria-hidden="true">
-              <circle cx="10" cy="10" r="4" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4" />
+              <circle cx="8" cy="7" r="3" />
+              <path d="M2.5 16c.6-2.6 2.8-4 5.5-4s4.9 1.4 5.5 4" />
             </svg>
-          </button>
-          <button class="icon-btn" id="btn-logout" title="退出" aria-label="退出">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 3H4v14h4M12 6l4 4-4 4M16 10H8" /></svg>
+            成员管理
           </button>
         </footer>
       </aside>
 
-      <!-- 主区：消息流 -->
+      <!-- ③ 消息区 -->
       <main class="main">
         <header class="chat-head">
           <div class="chat-title">
             <h1 id="chat-name">大厅</h1>
-            <p class="chat-sub" id="chat-sub">0 条消息</p>
+            <p class="chat-sub" id="chat-sub"></p>
           </div>
           <div class="chat-actions">
-            <button class="chip" id="btn-mentions" data-on="false">@我的</button>
-            <div class="seg" role="tablist" aria-label="信息面板">
-              <button class="seg-btn is-active" data-panel="members" role="tab">成员</button>
-              <button class="seg-btn" data-panel="jobs" role="tab">投递</button>
-              <button class="seg-btn" data-panel="files" role="tab">文件</button>
-            </div>
+            <button class="ghost-btn sm" id="btn-toggle-aside" title="收起/展开右侧栏">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <rect x="3" y="4" width="14" height="12" rx="2" /><path d="M12.5 4v12" />
+              </svg>
+            </button>
           </div>
         </header>
+
+        <div class="chat-tabs" role="tablist" aria-label="消息视图">
+          <button class="tab is-active" data-tab="all" role="tab">会话概览</button>
+          <button class="tab" data-tab="mentions" role="tab">
+            @我的消息<span class="tab-badge" id="mention-count" hidden>0</span>
+          </button>
+          <button class="tab is-muted" role="tab" disabled title="审批流还没做，别被这个标签骗了">待授权</button>
+        </div>
 
         <div class="messages" id="messages" aria-live="polite"></div>
 
         <form class="composer" id="composer" autocomplete="off">
           <div class="mention-menu" id="mention-menu" hidden></div>
-          <textarea id="input" rows="1" placeholder="说点什么，@ 可以叫醒成员" aria-label="消息输入"></textarea>
-          <div class="composer-bar">
-            <span class="hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-            <button class="send-btn" type="submit" id="btn-send" disabled>
-              <span>发送</span>
-            </button>
+          <div class="composer-box">
+            <textarea id="input" rows="1" placeholder="说点什么，@ 可以叫醒成员" aria-label="消息输入"></textarea>
+            <div class="composer-bar">
+              <span class="hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+              <button class="send-btn" type="submit" id="btn-send" disabled>
+                <span>发送</span>
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10l14-6-4 6 4 6-14-6Z" /></svg>
+              </button>
+            </div>
           </div>
         </form>
       </main>
 
-      <!-- 抽屉：成员 / 投递 / 文件 -->
-      <aside class="drawer" id="drawer">
-        <section class="panel" data-panel="members" id="panel-members"></section>
-        <section class="panel" data-panel="jobs" id="panel-jobs" hidden></section>
-        <section class="panel" data-panel="files" id="panel-files" hidden>
-          <p class="empty-note">这个版本只支持文字消息，图片与文件在下一个版本提供。</p>
-        </section>
+      <!-- ④ 右侧：成员 / 投递 -->
+      <aside class="aside" id="aside">
+        <header class="aside-head">
+          <div class="aside-tabs" role="tablist" aria-label="侧栏面板">
+            <button class="aside-tab is-active" data-panel="members" role="tab">成员</button>
+            <button class="aside-tab" data-panel="jobs" role="tab">投递</button>
+          </div>
+          <button class="icon-btn" id="btn-close-aside" title="收起">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 5l5 5-5 5" /></svg>
+          </button>
+        </header>
+        <div class="aside-body">
+          <section class="panel" data-panel="members" id="panel-members"></section>
+          <section class="panel" data-panel="jobs" id="panel-jobs" hidden></section>
+        </div>
       </aside>
     </div>
 
     <!-- 登录 -->
     <div class="overlay" id="login" hidden>
       <form class="card login-card" id="login-form">
-        <div class="brand brand-lg">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <span class="brand-name">围炉</span>
+        <div class="login-mark">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3c2.6 3 4 5.2 4 7.6a4 4 0 0 1-8 0C8 8.2 9.4 6 12 3Z" />
+            <path d="M8 14a4 4 0 0 0 8 0" />
+          </svg>
         </div>
-        <p class="login-hint">输入主人口令进入。首次启动的口令在 <code>data/owner-key.txt</code>。</p>
+        <h1 class="login-title">围炉</h1>
+        <p class="login-sub">一个让人和 AI 成员平等说话的群聊桥</p>
         <input type="password" id="login-input" placeholder="主人口令" autocomplete="current-password" required />
         <p class="form-error" id="login-error" hidden></p>
         <button class="primary-btn" type="submit">进入</button>
+        <p class="login-hint">首次启动的口令在 <code>data/owner-key.txt</code></p>
       </form>
     </div>
 

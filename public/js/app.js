@@ -4,6 +4,7 @@ import {
   $$,
   esc,
   avatarEl,
+  avatarUrl,
   fmtTime,
   fmtRelative,
   dayLabel,
@@ -17,6 +18,9 @@ import { initMembers } from './members.js';
  *
  * 状态刻意保持扁平：一个 state 对象 + 若干渲染函数，没有虚拟 DOM 也没有框架。
  * 消息增量靠 seq 游标，SSE 只负责「叫醒」，即使漏事件也能靠下一轮拉取补上。
+ *
+ * 视图分四栏：图标栏 / 会话栏 / 消息区 / 右侧栏。
+ * 布局交给 CSS grid，脚本只管状态与内容。
  */
 
 const state = {
@@ -26,7 +30,8 @@ const state = {
   messages: [],
   lastSeq: 0,
   members: [],
-  filterMentions: false,
+  query: '',
+  tab: 'all', // all | mentions
   es: null,
   mentionIndex: 0,
   mentionItems: [],
@@ -41,7 +46,7 @@ async function boot() {
   bindLogin();
   bindTheme();
   bindComposer();
-  bindPanels();
+  bindChrome();
 
   try {
     const me = await api.me();
@@ -64,8 +69,15 @@ function showLogin() {
 async function enterApp() {
   $('#login').hidden = true;
   $('#app').hidden = false;
+  // 窄屏默认收起右侧栏，宽屏直接展开
+  if (window.innerWidth < 1180) $('#app').classList.add('aside-closed');
   await loadChats();
-  await selectChat(state.chats[0]?.id || 'main');
+  // 默认进最近有动静的会话；全新空会话不抢默认位
+  const latest =
+    [...state.chats]
+      .sort((a, b) => (b.last?.createdAt || b.updatedAt || 0) - (a.last?.createdAt || a.updatedAt || 0))
+      .find((c) => c.last) || state.chats[0];
+  await selectChat(latest?.id || 'main');
   initMembers({ onChanged: refreshMembers });
 }
 
@@ -108,6 +120,60 @@ function bindTheme() {
   });
 }
 
+/** 顶栏、右侧栏、标签页这些「壳」上的交互，与业务数据无关。 */
+function bindChrome() {
+  // 右侧栏开合
+  const toggleAside = () => {
+    const closed = $('#app').classList.toggle('aside-closed');
+    $('#app').classList.toggle('aside-open', !closed);
+  };
+  $('#btn-toggle-aside').addEventListener('click', toggleAside);
+  $('#btn-close-aside').addEventListener('click', () => {
+    $('#app').classList.add('aside-closed');
+    $('#app').classList.remove('aside-open');
+  });
+
+  // 右侧栏分段：成员 / 投递
+  $$('.aside-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $$('.aside-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
+      const want = btn.dataset.panel;
+      $$('.panel').forEach((p) => (p.hidden = p.dataset.panel !== want));
+      if (want === 'jobs') loadJobs();
+    });
+  });
+
+  // 消息视图标签
+  $$('.tab[data-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.tab = btn.dataset.tab;
+      $$('.tab[data-tab]').forEach((b) => b.classList.toggle('is-active', b === btn));
+      renderMessages();
+    });
+  });
+
+  // 会话搜索
+  $('#chat-search').addEventListener('input', (e) => {
+    state.query = e.target.value.trim().toLowerCase();
+    renderChats();
+  });
+
+  // 图标栏的成员入口与左栏底部按钮等价
+  $('#btn-members-rail').addEventListener('click', () => $('#btn-members').click());
+
+  $('#btn-new-chat').addEventListener('click', async () => {
+    const name = prompt('新会话名称');
+    if (!name?.trim()) return;
+    try {
+      const { chat } = await api.createChat(name.trim());
+      await loadChats();
+      await selectChat(chat.id);
+    } catch (ex) {
+      toast(ex.message);
+    }
+  });
+}
+
 // ── 会话 ────────────────────────────────────────────────────────────
 
 async function loadChats() {
@@ -119,18 +185,33 @@ async function loadChats() {
 function renderChats() {
   const list = $('#chat-list');
   list.textContent = '';
-  for (const c of state.chats) {
+  const q = state.query;
+  const shown = q ? state.chats.filter((c) => c.name.toLowerCase().includes(q)) : state.chats;
+  $('#chat-count').textContent = q ? `${shown.length}/${state.chats.length}` : String(state.chats.length);
+
+  if (!shown.length) {
+    const p = document.createElement('p');
+    p.className = 'empty-note';
+    p.textContent = q ? '没有匹配的会话' : '还没有会话';
+    list.append(p);
+    return;
+  }
+
+  for (const c of shown) {
     const btn = document.createElement('button');
     btn.className = `chat-item${c.id === state.chatId ? ' is-active' : ''}`;
     const preview = c.last
       ? `${c.last.sender === 'user' ? '你' : nameOf(c.last.sender)}：${c.last.text}`
       : '还没有消息';
     btn.innerHTML =
-      `<div class="chat-item-top">` +
+      `<span class="chat-avatar">${esc(c.name.slice(0, 1).toUpperCase())}</span>` +
+      `<span class="chat-item-body">` +
+      `<span class="chat-item-top">` +
       `<span class="chat-item-name">${esc(c.name)}</span>` +
       `<span class="chat-item-time">${c.last ? fmtTime(c.last.createdAt) : ''}</span>` +
-      `</div>` +
-      `<div class="chat-item-preview">${esc(preview)}</div>`;
+      `</span>` +
+      `<span class="chat-item-preview">${esc(preview)}</span>` +
+      `</span>`;
     btn.addEventListener('click', () => selectChat(c.id));
     list.append(btn);
   }
@@ -178,11 +259,13 @@ async function loadMessages() {
     renderMessages();
   } else if (data.messages.length) {
     for (const m of data.messages) appendMessage(m);
+    updateMentionCount();
   }
   if (state.messages.length) {
     state.lastSeq = state.messages[state.messages.length - 1].seq;
   }
   updateSub();
+  updateMentionCount();
 }
 
 function updateSub() {
@@ -191,17 +274,61 @@ function updateSub() {
   $('#chat-sub').textContent = `${n} 条消息 · ${state.members.length} 位成员（${online} 位可达）`;
 }
 
+function updateMentionCount() {
+  const badge = $('#mention-count');
+  const n = state.messages.filter((m) => m.sender !== 'user' && m.sender !== 'system' && mentionsMe(m.text)).length;
+  badge.hidden = !n;
+  badge.textContent = String(n);
+}
+
 function nameOf(sender) {
   if (sender === 'user') return '你';
   if (sender === 'system') return '系统';
   return state.members.find((m) => m.handle === sender)?.display || sender;
 }
 
+/** 成员消息里有没有点名主人。消息是纯文本，这里只做关键词判定。 */
+function mentionsMe(text) {
+  const body = String(text || '');
+  return /@(我|me|你|主人|all|所有人|全体)/i.test(body);
+}
+
+function visibleMessages() {
+  return state.tab === 'mentions'
+    ? state.messages.filter((m) => m.sender !== 'user' && m.sender !== 'system' && mentionsMe(m.text))
+    : state.messages;
+}
+
 function renderMessages() {
   const box = $('#messages');
   box.textContent = '';
+
+  const list = visibleMessages();
+
+  if (state.tab === 'all' && state.messages.length === 0) {
+    box.append(
+      emptyState(
+        '这是一间新屋子',
+        '说第一句话，或者用 <code>@成员名</code> 把它叫醒。成员离线时消息会排队等着，不会丢。',
+      ),
+    );
+    return;
+  }
+
+  if (state.tab === 'mentions' && list.length === 0) {
+    box.append(
+      emptyState(
+        '还没有 @ 你的消息',
+        '成员的回复里出现 <code>@我</code>、<code>@me</code> 或 <code>@主人</code> 时会收进这里。',
+      ),
+    );
+    return;
+  }
+
+  if (state.tab === 'all') box.append(buildPinned());
+
   let lastDay = '';
-  for (const m of state.messages) {
+  for (const m of list) {
     const day = dayLabel(m.createdAt);
     if (day !== lastDay) {
       const sep = document.createElement('div');
@@ -215,9 +342,47 @@ function renderMessages() {
   scrollToBottom(true);
 }
 
+function emptyState(title, text) {
+  const div = document.createElement('div');
+  div.className = 'empty-state';
+  div.innerHTML =
+    `<div class="empty-icon"><svg viewBox="0 0 20 20" aria-hidden="true">` +
+    `<path d="M4 4h12v9H8l-4 3V4Z" /></svg></div>` +
+    `<div class="empty-title">${esc(title)}</div>` +
+    `<div class="empty-text">${text}</div>`;
+  return div;
+}
+
+/** 群简介：把「这个群是什么、怎么叫醒成员」讲清楚，同时露出在场的人。 */
+function buildPinned() {
+  const div = document.createElement('div');
+  div.className = 'pinned';
+  const faces = state.members
+    .slice(0, 6)
+    .map((m) => `<img src="${esc(avatarUrl(m, BASE))}" alt="${esc(m.display)}" title="${esc(m.display)}" />`)
+    .join('');
+  const names = state.members.map((m) => m.display).join('、');
+  div.innerHTML =
+    `<div class="pinned-top">` +
+    `<span class="pinned-label">群简介</span>` +
+    `<span class="pinned-title">${esc($('#chat-name').textContent)}</span>` +
+    `<span class="pinned-faces">${faces}</span>` +
+    `</div>` +
+    `<div class="pinned-text">${
+      state.members.length
+        ? `${esc(names)} 在这个群里。用 <code>@名字</code> 叫醒成员，cli 型首次响应约 5 秒。`
+        : '这个群还没有成员。到「成员管理」把 agent 拉进来，然后 <code>@它</code> 说话。'
+    }</div>`;
+  return div;
+}
+
 function appendMessage(m) {
   if (state.messages.some((x) => x.id === m.id)) return;
   state.messages.push(m);
+  if (state.tab !== 'all') {
+    renderMessages();
+    return;
+  }
   const box = $('#messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   box.append(buildMessage(m));
@@ -245,25 +410,85 @@ function buildMessage(m) {
 
   wrap.append(avatarEl(member, BASE));
 
-  const body = document.createElement('div');
-  body.className = 'msg-body';
-  const hit = state.filterMentions && !isMe && mentionsMe(m.text);
-  if (hit) wrap.classList.add('is-hit');
-
-  body.innerHTML =
+  const block = document.createElement('div');
+  block.className = 'msg-block';
+  block.innerHTML =
     `<div class="msg-meta">` +
     `<span class="msg-name">${esc(isMe ? '你' : member.display)}</span>` +
     (isMe ? '' : `<span class="msg-handle">@${esc(m.sender)}</span>`) +
     `<span class="msg-time">${fmtTime(m.createdAt)}</span>` +
     `</div>` +
-    `<div class="msg-text">${esc(m.text)}</div>`;
-  wrap.append(body);
+    `<div class="msg-text">${highlightMentions(m.text)}</div>`;
+
+  // 悬浮操作：@ 它 / 复制原文
+  const ops = document.createElement('div');
+  ops.className = 'msg-ops';
+  if (!isMe) {
+    const at = document.createElement('button');
+    at.type = 'button';
+    at.className = 'msg-op';
+    at.textContent = '@ 它';
+    at.addEventListener('click', () => {
+      const input = $('#input');
+      input.value = `${input.value}${input.value && !input.value.endsWith(' ') ? ' ' : ''}@${m.sender} `;
+      input.focus();
+      input.dispatchEvent(new Event('input'));
+    });
+    ops.append(at);
+  }
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'msg-op';
+  copy.textContent = '复制';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(m.text);
+      toast('已复制');
+    } catch {
+      toast('复制失败，浏览器不允许');
+    }
+  });
+  ops.append(copy);
+  wrap.append(block, ops);
+
+  if (state.tab === 'mentions') wrap.classList.add('is-hit');
   return wrap;
 }
 
-function mentionsMe(text) {
-  const body = String(text || '');
-  return ['@我', '@me', '@你'].some((k) => body.includes(k)) || /(^|\s)@(all|所有人)/.test(body);
+/**
+ * 把正文里的 @ 提及染成强调色。
+ * 先转义再匹配，避免把用户内容当 HTML；成员名按最长匹配，避免 @如 吃掉 @如意。
+ */
+function highlightMentions(text) {
+  const raw = esc(text);
+  const dict = [];
+  for (const m of state.members) {
+    for (const k of [m.handle, m.display, ...(m.aliases || [])]) {
+      if (k) dict.push({ member: m, key: k });
+    }
+  }
+  dict.sort((a, b) => b.key.length - a.key.length);
+
+  let out = '';
+  let i = 0;
+  while (i < raw.length) {
+    const at = raw.indexOf('@', i);
+    if (at === -1) {
+      out += raw.slice(i);
+      break;
+    }
+    out += raw.slice(i, at);
+    const rest = raw.slice(at + 1);
+    const hit = dict.find((d) => rest.toLowerCase().startsWith(d.key.toLowerCase()));
+    if (hit) {
+      out += `<span class="msg-mention">@${esc(hit.member.display)}</span>`;
+      i = at + 1 + hit.key.length;
+    } else {
+      out += '@';
+      i = at + 1;
+    }
+  }
+  return out;
 }
 
 function scrollToBottom(instant = false) {
@@ -358,10 +583,7 @@ function updateMentionMenu() {
   state.mentionItems = state.members
     .filter((mm) => {
       if (!q) return true;
-      return (
-        mm.handle.toLowerCase().includes(q) ||
-        mm.display.toLowerCase().includes(q)
-      );
+      return mm.handle.toLowerCase().includes(q) || mm.display.toLowerCase().includes(q);
     })
     .slice(0, 6);
 
@@ -417,44 +639,17 @@ function closeMentionMenu() {
   $('#mention-menu').hidden = true;
 }
 
-// ── 右侧面板 ────────────────────────────────────────────────────────
-
-function bindPanels() {
-  $$('.seg-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      $$('.seg-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-      const want = btn.dataset.panel;
-      $$('.panel').forEach((p) => (p.hidden = p.dataset.panel !== want));
-      $('#app').classList.add('drawer-open');
-      if (want === 'jobs') loadJobs();
-    });
-  });
-
-  $('#btn-mentions').addEventListener('click', () => {
-    state.filterMentions = !state.filterMentions;
-    $('#btn-mentions').dataset.on = String(state.filterMentions);
-    renderMessages();
-  });
-
-  $('#btn-new-chat').addEventListener('click', async () => {
-    const name = prompt('新会话名称');
-    if (!name?.trim()) return;
-    try {
-      const { chat } = await api.createChat(name.trim());
-      await loadChats();
-      await selectChat(chat.id);
-    } catch (ex) {
-      toast(ex.message);
-    }
-  });
-}
+// ── 右侧栏 ──────────────────────────────────────────────────────────
 
 async function refreshMembers() {
   try {
     const { members } = await api.status(state.chatId);
+    const had = state.members.length;
     state.members = members;
     renderMembersPanel();
     updateSub();
+    // 消息里的 @ 高亮和群简介都依赖成员表；成员表首次到达时重画一次
+    if (!had && members.length) renderMessages();
   } catch {
     // 面板刷新失败不打断主流程
   }
@@ -465,7 +660,7 @@ function renderMembersPanel() {
   box.textContent = '';
   const title = document.createElement('p');
   title.className = 'panel-title';
-  title.textContent = `成员 · ${state.members.length}`;
+  title.innerHTML = `<span>成员</span><span class="list-count">${state.members.length}</span>`;
   box.append(title);
 
   if (!state.members.length) {
@@ -512,7 +707,7 @@ async function loadJobs() {
     box.textContent = '';
     const title = document.createElement('p');
     title.className = 'panel-title';
-    title.textContent = `最近投递 · ${jobs.length}`;
+    title.innerHTML = `<span>最近投递</span><span class="list-count">${jobs.length}</span>`;
     box.append(title);
 
     if (!jobs.length) {
@@ -539,7 +734,7 @@ async function loadJobs() {
         `<div class="job-top"><span>@${esc(j.handle)}</span>` +
         `<span class="badge ${cls}">${text}</span></div>` +
         `<div class="job-text">${esc(j.text).slice(0, 60)}</div>` +
-        `<div class="job-text" style="margin-top:4px;color:var(--faint)">${fmtRelative(j.createdAt)}</div>`;
+        `<div class="job-text">${fmtRelative(j.createdAt)}</div>`;
       box.append(row);
     }
   } catch {
