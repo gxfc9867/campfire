@@ -103,13 +103,31 @@ export function registerMessageRoutes(router, ctx) {
   router.get(
     '/api/chats',
     (req, res) => {
+      const unread = store.unreadCounts();
       const chats = store.listChats().map((c) => ({
         ...c,
         count: store.countMessages(c.id),
         last: store.lastMessageOf(c.id),
         members: store.listMembersOf(c.id),
+        readSeq: store.getReadSeq(c.id),
+        unread: unread[c.id] || 0,
       }));
       sendJson(res, 200, { chats, main: MAIN_CHAT.id });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 打开某个会话时调用：把已读位置推到当前最新。 */
+  router.post(
+    /^\/api\/chats\/([A-Za-z0-9_-]{1,40})\/read$/,
+    async (req, res, url, identity, id) => {
+      if (!store.getChat(id)) throw notFound('会话不存在');
+      const body = await readJson(req, 4096);
+      const latest = store.lastMessageOf(id);
+      const seq = Number(body.seq) || latest?.seq || 0;
+      store.markRead(id, seq);
+      hub.emit('change', { type: 'chat' });
+      sendJson(res, 200, { ok: true, readSeq: store.getReadSeq(id) });
     },
     { auth: 'owner' },
   );
@@ -187,6 +205,41 @@ export function registerMessageRoutes(router, ctx) {
         message,
         jobs: jobs.map((j) => ({ id: j.id, handle: j.handle, status: j.status })),
       });
+    },
+    { auth: 'owner' },
+  );
+
+  /**
+   * 重试一条投递。requestId 不变，所以成员真在线时回执幂等会兜住重复。
+   * 重试后立刻 notify：挂着的长轮询不用等 25 秒超时。
+   */
+  router.post(
+    /^\/api\/jobs\/([A-Za-z0-9_-]{1,40})\/retry$/,
+    (req, res, url, identity, id) => {
+      const job = store.retryJob(id, cfg.jobExpireMs);
+      if (!job) throw badRequest('这条投递当前状态不可重试');
+      waiters.notify(job.handle);
+      if (planner.decide(job.handle).action === 'wake') planner.markWoken(job.handle);
+      hub.emit('change', { type: 'job', chatId: job.chatId });
+      sendJson(res, 200, { ok: true, job: { id: job.id, status: job.status } });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 取消：等太久了不想等。群里留一条说明，历史才对得上。 */
+  router.post(
+    /^\/api\/jobs\/([A-Za-z0-9_-]{1,40})\/cancel$/,
+    (req, res, url, identity, id) => {
+      const job = store.cancelJob(id);
+      if (!job) throw badRequest('这条投递当前状态不可取消');
+      store.insertMessage({
+        chatId: job.chatId,
+        sender: SENDER.system,
+        text: `给 @${job.handle} 的那条消息已取消投递。`,
+        meta: { kind: JOB_STATUS.cancelled, jobId: job.id },
+      });
+      hub.emit('change', { type: 'message', chatId: job.chatId });
+      sendJson(res, 200, { ok: true });
     },
     { auth: 'owner' },
   );

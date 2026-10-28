@@ -82,6 +82,13 @@ export class Store {
         value TEXT NOT NULL
       );
     `);
+
+    // 老库迁移：chats 补 last_read_seq（主人的已读位置）。
+    // SQLite 的 ALTER 只支持加列，所以只能逐列检查补齐。
+    const cols = this.db.prepare('PRAGMA table_info(chats)').all().map((c) => c.name);
+    if (!cols.includes('last_read_seq')) {
+      this.db.exec('ALTER TABLE chats ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   close() {
@@ -139,16 +146,47 @@ export class Store {
     this.db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(Date.now(), id);
   }
 
-  /** 侧栏摘要：最后一条消息的片段，避免前端为每个会话各拉一次。 */
+  /** 侧栏摘要：最后一条消息的片段，避免前端为每个会话各拉一次。seq 供标记已读用。 */
   lastMessageOf(chatId) {
     const row = this.db
-      .prepare('SELECT sender, text, created_at FROM messages WHERE chat_id = ? ORDER BY seq DESC LIMIT 1')
+      .prepare('SELECT seq, sender, text, created_at FROM messages WHERE chat_id = ? ORDER BY seq DESC LIMIT 1')
       .get(chatId);
-    return row ? { sender: row.sender, text: row.text, createdAt: row.created_at } : null;
+    return row ? { seq: row.seq, sender: row.sender, text: row.text, createdAt: row.created_at } : null;
   }
 
   countMessages(chatId) {
     return this.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?').get(chatId).n;
+  }
+
+  /** 记下主人的已读位置。只前进不后退：旧标签页晚到不会把未读变回去。 */
+  markRead(chatId, seq) {
+    const n = Math.max(Number(seq) || 0, 0);
+    this.db
+      .prepare('UPDATE chats SET last_read_seq = MAX(last_read_seq, ?) WHERE id = ?')
+      .run(n, chatId);
+  }
+
+  getReadSeq(chatId) {
+    const row = this.db.prepare('SELECT last_read_seq FROM chats WHERE id = ?').get(chatId);
+    return row?.last_read_seq ?? 0;
+  }
+
+  /** 各会话的未读数。主人自己发的和系统说明不计入——那是噪音。 */
+  unreadCounts() {
+    const rows = this.db
+      .prepare(
+        `SELECT m.chat_id AS chatId, COUNT(*) AS n
+           FROM messages m
+           JOIN chats c ON c.id = m.chat_id
+          WHERE m.seq > c.last_read_seq
+            AND m.sender != 'user'
+            AND c.archived_at IS NULL
+          GROUP BY m.chat_id`,
+      )
+      .all();
+    const out = {};
+    for (const r of rows) out[r.chatId] = r.n;
+    return out;
   }
 
   // ── 消息 ────────────────────────────────────────────────────────────
@@ -330,6 +368,35 @@ export class Store {
     const stmt = this.db.prepare('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?');
     for (const r of rows) stmt.run(JOB_STATUS.expired, now, r.id);
     return rows.map(mapJob);
+  }
+
+  /**
+   * 重试：expired / failed / cancelled 回到 pending。
+   * requestId 保持不变——成员如果其实还在线并且已经拿到过，
+   * 回执时的幂等去重会兜住，不会冒出第二条回复。
+   */
+  retryJob(id, expiresInMs) {
+    const job = this.getJob(id);
+    if (!job) return null;
+    if (![JOB_STATUS.expired, JOB_STATUS.failed, JOB_STATUS.cancelled].includes(job.status)) {
+      return null;
+    }
+    const now = Date.now();
+    this.db
+      .prepare('UPDATE jobs SET status = ?, error = NULL, updated_at = ?, expires_at = ? WHERE id = ?')
+      .run(JOB_STATUS.pending, now, now + expiresInMs, id);
+    return this.getJob(id);
+  }
+
+  /** 取消：还在排队的可以不等了。已 done 的不可取消——话已经回过了。 */
+  cancelJob(id) {
+    const job = this.getJob(id);
+    if (!job) return null;
+    if (![JOB_STATUS.pending, JOB_STATUS.processing].includes(job.status)) return null;
+    this.db
+      .prepare('UPDATE jobs SET status = ?, error = ?, updated_at = ? WHERE id = ?')
+      .run(JOB_STATUS.cancelled, '主人手动取消', Date.now(), id);
+    return this.getJob(id);
   }
 
   jobStats() {

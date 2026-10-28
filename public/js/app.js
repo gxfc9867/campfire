@@ -30,6 +30,9 @@ const state = {
   chatId: 'main',
   messages: [],
   lastSeq: 0,
+  oldestSeq: 0, // 已加载的最旧一条，历史翻页的游标
+  hasOlder: false,
+  loadingOlder: false,
   members: [],
   query: '',
   tab: 'all', // all | mentions
@@ -37,6 +40,7 @@ const state = {
   mentionIndex: 0,
   mentionItems: [],
   mentionQuery: '',
+  awayCount: 0, // 窗口不在前台期间攒下的新消息数，回到前台清零
 };
 
 const BASE = api.base;
@@ -72,6 +76,10 @@ async function enterApp() {
   $('#app').hidden = false;
   // 窄屏默认收起右侧栏，宽屏直接展开
   if (window.innerWidth < 1180) $('#app').classList.add('aside-closed');
+  // 桌面通知不弹窗打扰：只在用户主动问时才说明，这里静默探测一次
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    setTimeout(() => Notification.requestPermission().catch(() => {}), 4000);
+  }
   await loadChats();
   // 默认进最近有动静的会话；全新空会话不抢默认位
   const latest =
@@ -173,6 +181,16 @@ function bindChrome() {
       toast(ex.message);
     }
   });
+
+  // 往上滚到顶附近就开始拉更早的历史；节流交给 loadingOlder 标志
+  $('#messages').addEventListener(
+    'scroll',
+    () => {
+      const box = $('#messages');
+      if (box.scrollTop < 120) loadOlder();
+    },
+    { passive: true },
+  );
 }
 
 // ── 会话 ────────────────────────────────────────────────────────────
@@ -212,7 +230,8 @@ function renderChats() {
       `<span class="chat-item-time">${c.last ? fmtTime(c.last.createdAt) : ''}</span>` +
       `</span>` +
       `<span class="chat-item-preview">${esc(preview)}</span>` +
-      `</span>`;
+      `</span>` +
+      (c.unread ? `<span class="chat-unread">${c.unread > 99 ? '99+' : c.unread}</span>` : '');
     btn.addEventListener('click', () => selectChat(c.id));
     list.append(btn);
   }
@@ -223,10 +242,16 @@ async function selectChat(id) {
   state.chatId = id;
   state.messages = [];
   state.lastSeq = 0;
+  state.oldestSeq = 0;
+  state.hasOlder = false;
+  state.awayCount = 0;
+  updateTitleBadge();
   $('#chat-name').textContent = state.chats.find((c) => c.id === id)?.name || id;
   renderChats();
   await Promise.all([loadMessages(), refreshMembers(), loadJobs()]);
   connectEvents();
+  // 告诉服务端读到哪了；顺手把侧栏的未读徽标清掉
+  api.markRead(id, state.lastSeq).then(loadChats).catch(() => {});
   $('#input')?.focus();
 }
 
@@ -235,12 +260,25 @@ function connectEvents() {
   state.es = api.events(
     state.chatId,
     (evt) => {
-      if (evt.type === 'message' && (!evt.chatId || evt.chatId === state.chatId)) {
+      if (evt.type === 'message') {
+        // 别的群来了消息：刷侧栏未读 + 视情况提醒，当前群照常拉增量
+        if (evt.chatId && evt.chatId !== state.chatId) {
+          loadChats();
+          notifyIfHidden(evt.chatId);
+          return;
+        }
         loadMessages();
+        if (document.hidden) {
+          state.awayCount += 1;
+          updateTitleBadge();
+        } else {
+          api.markRead(state.chatId, state.lastSeq).catch(() => {});
+        }
       } else if (evt.type === 'members' || evt.type === 'memory') {
         refreshMembers();
-      } else if (evt.type === 'chat') {
+      } else if (evt.type === 'chat' || evt.type === 'job') {
         loadChats();
+        loadJobs();
       }
     },
     () => {
@@ -250,6 +288,33 @@ function connectEvents() {
   );
 }
 
+// ── 未读提醒 ─────────────────────────────────────────────────────────
+
+/** 窗口不在前台时收到新消息就 +1，回到前台清零。标题与通知都基于这个数。 */
+function updateTitleBadge() {
+  document.title = state.awayCount ? `(${state.awayCount}) 围炉` : '围炉 · campfire';
+}
+
+async function notifyIfHidden(chatId) {
+  if (!document.hidden) return;
+  const chat = state.chats.find((c) => c.id === chatId);
+  const name = chat?.name || '新消息';
+  updateTitleBadge();
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    // 只提示有消息的会话名，内容等用户点进来再看——通知里放正文容易在共享屏幕时泄露
+    new Notification('围炉', { body: `「${name}」有新消息`, tag: `cf-${chatId}` });
+  } catch {
+    // 通知失败无所谓，标题还在
+  }
+}
+
+window.addEventListener('focus', () => {
+  state.awayCount = 0;
+  updateTitleBadge();
+  api.markRead(state.chatId, state.lastSeq).then(loadChats).catch(() => {});
+});
+
 // ── 消息 ────────────────────────────────────────────────────────────
 
 async function loadMessages() {
@@ -257,6 +322,8 @@ async function loadMessages() {
   const data = await api.messages(state.chatId, after ? { after } : {});
   if (!after) {
     state.messages = data.messages;
+    state.hasOlder = data.hasMore;
+    state.oldestSeq = state.messages[0]?.seq || 0;
     renderMessages();
   } else if (data.messages.length) {
     for (const m of data.messages) appendMessage(m);
@@ -269,6 +336,37 @@ async function loadMessages() {
   updateMentionCount();
 }
 
+/** 往上翻历史：以已加载的最旧一条为游标继续往前拉。 */
+async function loadOlder() {
+  if (!state.hasOlder || state.loadingOlder || !state.oldestSeq) return;
+  state.loadingOlder = true;
+  try {
+    const data = await api.messages(state.chatId, { before: state.oldestSeq, limit: 50 });
+    if (data.messages.length) {
+      state.messages.unshift(...data.messages);
+      state.oldestSeq = data.messages[0].seq;
+      // 先记住视口位置，重绘后恢复——prepend 会让内容整体下移
+      const box = $('#messages');
+      const keep = box.scrollHeight - box.scrollTop;
+      renderMessages({ restoreOffset: keep });
+    }
+    state.hasOlder = data.hasMore;
+    renderOlderSentinel();
+  } catch {
+    // 拉不动就算了，下次滚动再试
+  } finally {
+    state.loadingOlder = false;
+  }
+}
+
+/** 顶部那条「还有更早的」提示，有更多历史时才显示。 */
+function renderOlderSentinel() {
+  const el = $('#older-sentinel');
+  if (!el) return;
+  el.hidden = !state.hasOlder;
+  el.textContent = state.loadingOlder ? '正在加载…' : '往上滚动加载更早的消息';
+}
+
 function updateSub() {
   const n = state.messages.length;
   const online = state.members.filter((m) => m.presence?.reachable).length;
@@ -277,7 +375,7 @@ function updateSub() {
 
 function updateMentionCount() {
   const badge = $('#mention-count');
-  const n = state.messages.filter((m) => m.sender !== 'user' && m.sender !== 'system' && mentionsMe(m.text)).length;
+  const n = state.messages.filter(isMentionToOwner).length;
   badge.hidden = !n;
   badge.textContent = String(n);
 }
@@ -288,19 +386,21 @@ function nameOf(sender) {
   return state.members.find((m) => m.handle === sender)?.display || sender;
 }
 
-/** 成员消息里有没有点名主人。消息是纯文本，这里只做关键词判定。 */
-function mentionsMe(text) {
-  const body = String(text || '');
-  return /@(我|me|你|主人|all|所有人|全体)/i.test(body);
+/**
+ * 这条成员消息算不算「点名主人」。
+ * 判定在服务端回复落库时就做好了（meta.mentionsOwner）：
+ * 显式写了 @主人/@me，或者它本来就是在回应主人发起的那条消息。
+ * 前端不再用关键词猜——之前那套正则会把成员说的「你可以试试」也算进去。
+ */
+function isMentionToOwner(m) {
+  return m.sender !== 'user' && m.sender !== 'system' && Boolean(m.meta?.mentionsOwner);
 }
 
 function visibleMessages() {
-  return state.tab === 'mentions'
-    ? state.messages.filter((m) => m.sender !== 'user' && m.sender !== 'system' && mentionsMe(m.text))
-    : state.messages;
+  return state.tab === 'mentions' ? state.messages.filter(isMentionToOwner) : state.messages;
 }
 
-function renderMessages() {
+function renderMessages({ restoreOffset = 0 } = {}) {
   const box = $('#messages');
   box.textContent = '';
 
@@ -320,11 +420,19 @@ function renderMessages() {
     box.append(
       emptyState(
         '还没有 @ 你的消息',
-        '成员的回复里出现 <code>@我</code>、<code>@me</code> 或 <code>@主人</code> 时会收进这里。',
+        '成员回复里点名 <code>@主人</code>，或是在回应你发起的那条消息，就会收进这里。',
       ),
     );
     return;
   }
+
+  // 历史翻页的提示条；放最顶上，有更早的消息时才露出来
+  const sentinel = document.createElement('div');
+  sentinel.className = 'older-sentinel';
+  sentinel.id = 'older-sentinel';
+  sentinel.hidden = !state.hasOlder;
+  sentinel.textContent = state.loadingOlder ? '正在加载…' : '往上滚动加载更早的消息';
+  if (state.tab === 'all') box.append(sentinel);
 
   if (state.tab === 'all') box.append(buildPinned());
 
@@ -340,7 +448,13 @@ function renderMessages() {
     }
     box.append(buildMessage(m));
   }
-  scrollToBottom(true);
+
+  if (restoreOffset) {
+    // 翻历史时保持视口里的内容不动，而不是跳回底部
+    box.scrollTop = box.scrollHeight - restoreOffset;
+  } else {
+    scrollToBottom(true);
+  }
 }
 
 function emptyState(title, text) {
@@ -690,15 +804,16 @@ async function loadJobs() {
     }
 
     const STATUS = {
-      pending: ['排队中', 'is-wakeable'],
-      processing: ['处理中', 'is-wakeable'],
-      done: ['已回执', 'is-ready'],
-      expired: ['已降级', 'is-offline'],
-      failed: ['失败', 'is-offline'],
+      pending: ['排队中', 'is-wakeable', ['cancel', '取消']],
+      processing: ['处理中', 'is-wakeable', []],
+      done: ['已回执', 'is-ready', []],
+      expired: ['已降级', 'is-offline', ['retry', '重试']],
+      failed: ['失败', 'is-offline', ['retry', '重试']],
+      cancelled: ['已取消', 'is-offline', ['retry', '重试']],
     };
 
     for (const j of jobs) {
-      const [text, cls] = STATUS[j.status] || [j.status, ''];
+      const [text, cls, actions] = STATUS[j.status] || [j.status, '', []];
       const row = document.createElement('div');
       row.className = 'job-row';
       row.innerHTML =
@@ -706,6 +821,31 @@ async function loadJobs() {
         `<span class="badge ${cls}">${text}</span></div>` +
         `<div class="job-text">${esc(j.text).slice(0, 60)}</div>` +
         `<div class="job-text">${fmtRelative(j.createdAt)}</div>`;
+
+      // 挂着不动的投递要给出口：能重试、能取消，而不是只能看着它降级
+      if (actions.length) {
+        const ops = document.createElement('div');
+        ops.className = 'job-ops';
+        for (const [act, label] of actions) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = `text-btn sm${act === 'cancel' ? ' danger' : ''}`;
+          b.textContent = label;
+          b.addEventListener('click', async () => {
+            b.disabled = true;
+            try {
+              if (act === 'retry') await api.retryJob(j.id);
+              else await api.cancelJob(j.id);
+              loadJobs();
+            } catch (ex) {
+              toast(ex instanceof ApiError ? ex.message : '操作失败');
+              b.disabled = false;
+            }
+          });
+          ops.append(b);
+        }
+        row.append(ops);
+      }
       box.append(row);
     }
   } catch {

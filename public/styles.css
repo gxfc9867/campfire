@@ -388,6 +388,7 @@ code {
 }
 
 .chat-item {
+  position: relative;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   gap: 9px;
@@ -425,6 +426,30 @@ code {
 
 .chat-item-body {
   min-width: 0;
+}
+
+/* 未读徽标：绝对定位在卡片右上，不挤压标题与预览 */
+.chat-unread {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  min-width: 16px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+}
+
+/* 历史翻页提示条 */
+.older-sentinel {
+  padding: 6px 0 10px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3);
 }
 
 .chat-item-top {
@@ -1235,6 +1260,12 @@ code {
   border-radius: var(--radius);
   background: var(--bg);
   margin-bottom: 6px;
+}
+
+.job-ops {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
 }
 
 .job-top {

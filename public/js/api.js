@@ -48,6 +48,7 @@ export const api = {
   createChat: (name) => request('/api/chats', { method: 'POST', body: { name } }),
   renameChat: (id, name) => request(`/api/chats/${id}`, { method: 'PATCH', body: { name } }),
   deleteChat: (id) => request(`/api/chats/${id}`, { method: 'DELETE' }),
+  markRead: (id, seq) => request(`/api/chats/${id}/read`, { method: 'POST', body: { seq } }),
 
   messages: (chatId, params = {}) => {
     const q = new URLSearchParams({ chat: chatId, ...params });
@@ -58,6 +59,8 @@ export const api = {
 
   status: (chatId) => request(`/api/status${chatId ? `?chat=${encodeURIComponent(chatId)}` : ''}`),
   jobs: (chatId) => request(`/api/jobs?chat=${encodeURIComponent(chatId)}`),
+  retryJob: (id) => request(`/api/jobs/${id}/retry`, { method: 'POST' }),
+  cancelJob: (id) => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
 
   members: () => request('/api/members'),
   member: (handle) => request(`/api/members/${handle}?reveal=1`),

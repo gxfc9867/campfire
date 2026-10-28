@@ -1,4 +1,4 @@
-import { MEMBER_STATE, DRIVER, SENDER, JOB_STATUS } from '../constants.js';
+import { MEMBER_STATE, DRIVER, SENDER, JOB_STATUS, MENTION_OWNER_RE } from '../constants.js';
 import { badRequest, forbidden, notFound, tooMany } from '../errors.js';
 import { readJson, sendJson } from '../http/util.js';
 
@@ -118,6 +118,12 @@ export function registerMemberRoutes(router, ctx) {
         jobId: job.id,
         replyTo: job.messageId,
         clientId: body.clientId || null,
+        // 「@我」的判定在服务端做完，前端只看标记：
+        // ① 回复里显式写了 @主人/@me；② 这条回复本来就是回应主人发的消息
+        meta: {
+          mentionsOwner:
+            MENTION_OWNER_RE.test(text) || store.getMessage(job.messageId)?.sender === SENDER.user,
+        },
       });
       store.finishJob(job.id, JOB_STATUS.done);
       store.touchChat(job.chatId);

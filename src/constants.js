@@ -40,6 +40,7 @@ export const DRIVER = {
  * done       —— 已回执
  * expired    —— 超过等待上限，降级为普通消息
  * failed     —— 成员明确报错
+ * cancelled  —— 主人手动取消（挂太久了不想等）
  */
 export const JOB_STATUS = {
   pending: 'pending',
@@ -47,10 +48,18 @@ export const JOB_STATUS = {
   done: 'done',
   expired: 'expired',
   failed: 'failed',
+  cancelled: 'cancelled',
 };
 
 /** handle 规则：小写字母开头，允许小写字母、数字、下划线、连字符。 */
 export const HANDLE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * 成员回复里点名主人的显式写法。
+ * 「@我」后面紧跟汉字（如「@我们」）或字母数字（如 @me2）都不算，
+ * 这是结构化判定，替代之前前端那套自然语言关键词猜测——那套误报太多。
+ */
+export const MENTION_OWNER_RE = /@(?:主人|owner|me|我)(?![\u4e00-\u9fa5a-zA-Z0-9_-])/i;
 
 /** 预置头像模板数量，对应 public/avatars/preset-NN.svg。 */
 export const AVATAR_PRESET_COUNT = 24;
