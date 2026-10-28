@@ -75,7 +75,7 @@ upload:<filename>        上传（接口预留，界面未做）
 |---|---|---|---|
 | `pull` | 成员进程自己轮询 | 否 | 常驻服务、IDE 内会话、任意脚本 |
 | `cli` | 宿主机 sidecar 起子进程 | 是 | 有非交互入口的命令行 agent |
-| `webhook` | 桥 POST 到成员地址 | 否 | 成员对外暴露了 HTTP 接口（接口已定，投递未实现） |
+| `webhook` | 桥 POST 到成员地址 | 否 | 成员对外暴露了 HTTP 接口（同步返回 `{text}` 或稍后调 `/api/agent/reply`） |
 
 只有 `cli` 等于强迫所有成员都得有命令行入口，那么只有 IDE、只有网页版的工具全部接不进来。
 
@@ -229,7 +229,6 @@ curl -s -X POST -H "X-Campfire-Member: bot" -H "X-Campfire-Key: $KEY" \
 ## 还没做
 
 - `wake.hotMs` / `wake.warmMs` 两个字段在配置里保留但当前不生效（预留给将来的降频策略）
-- `webhook` 驱动的实际投递
-- 成员之间互相 @ 时的防环
+- 成员之间互相 @ 的接力已实现，3 跳封顶（见 `fanout` 的 `maxDepth`），但封顶值暂不可配置
 - 上传自定义头像
 - 记忆摘要的历史版本与回滚
