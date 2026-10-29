@@ -85,10 +85,11 @@ GET /api/status?chat=<id>
 ### 会话与消息
 
 ```
-GET    /api/chats                          → { chats, main }
+GET    /api/chats                          → { chats, main }   单聊会带 kind/peer/peerInfo
 POST   /api/chats                          { name } → { chat }
-PATCH  /api/chats/:id                      { name } → { chat }
-DELETE /api/chats/:id                      → { ok }   主会话不可删
+POST   /api/chats/dm                       { handle } → { chat }   一个成员一条私聊，已有则复用
+PATCH  /api/chats/:id                      { name } → { chat }   改备注（单聊/群聊通用）
+DELETE /api/chats/:id                      → { ok }   解散群聊 / 删除私聊；主会话不可解散
 
 GET  /api/messages?chat=&after=&before=&limit=
   → { messages: [...], hasMore }

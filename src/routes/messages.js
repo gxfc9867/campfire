@@ -38,7 +38,50 @@ export function registerMessageRoutes(router, ctx) {
    * depth 限制成员之间的接力：主人 @ A，A 回 @ B（1 跳，允许），B 回 @ A（2 跳，
    * 允许），A 再回 @ B（3 跳，停）。没有这条规则，两个互相客气的 agent 能烧一晚上。
    */
+  /**
+   * 建投递任务并按驱动分流：webhook 推送、llm 桥内直调、其余靠长轮询叫醒。
+   * 三种入口（@提及、显式指定、私聊）共用这一处，避免某条路径漏掉新驱动。
+   */
+  function enqueue(member, { chatId, messageId, text, sender }) {
+    const job = store.createJob({
+      chatId,
+      messageId,
+      handle: member.handle,
+      requestId: shortId('r_'),
+      text,
+      expiresInMs: cfg.jobExpireMs,
+    });
+
+    const chat = store.getChat(chatId);
+    const chatName = chat?.name || chatId;
+    const senderName =
+      sender === SENDER.user ? '主人' : members.get(sender)?.display || sender;
+    const type = member.driver?.type;
+
+    if (type === DRIVER.webhook) {
+      // webhook 型成员不会来轮询，直接推过去；回执方式见 drivers/webhook.js
+      deliverWebhook(ctx, job, member, { chatName, senderName });
+    } else if (type === DRIVER.llm) {
+      // 桥内直连模型：没有外部进程可叫醒，这里直接把投递推进到终态
+      deliverLlm(ctx, job, member, { chatName });
+    } else {
+      // 叫醒正挂着的长轮询：这一步就是「下发唤醒」，桥只通知，不执行任何命令
+      waiters.notify(member.handle);
+      const decision = planner.decide(member.handle);
+      if (decision.action === 'wake') {
+        planner.markWoken(member.handle);
+      } else if (decision.action === 'hold') {
+        log.debug(`暂缓唤醒 ${member.handle}：${decision.reason}`);
+      }
+    }
+    return job;
+  }
+
   function fanout({ chatId, messageId, text, sender, maxDepth = 2 }) {
+    const chat = store.getChat(chatId);
+    // 私聊不接力：成员在私聊里 @ 了别人，也不能把话带到群外或另一个人那里
+    if (chat?.kind === 'dm') return [];
+
     const candidates = store
       .listMembersOf(chatId)
       .map((h) => members.get(h))
@@ -48,7 +91,6 @@ export function registerMessageRoutes(router, ctx) {
     const jobs = [];
     const message = store.getMessage(messageId);
     const depth = message ? chainDepth(message) : 0;
-    const chat = store.getChat(chatId);
 
     if (depth > maxDepth) {
       log.info(`接力深度 ${depth} 已达上限，@${targets.join(',') || '…'} 不再投递`);
@@ -63,45 +105,9 @@ export function registerMessageRoutes(router, ctx) {
     }
 
     for (const handle of targets) {
-      const requestId = shortId('r_');
-      const job = store.createJob({
-        chatId,
-        messageId,
-        handle,
-        requestId,
-        text,
-        expiresInMs: cfg.jobExpireMs,
-      });
-      jobs.push(job);
-
       const member = members.get(handle);
-      const chatName = chat?.name || chatId;
-
-      if (member?.driver.type === DRIVER.webhook) {
-        // webhook 型成员不会来轮询，直接推过去；回执方式见 drivers/webhook.js
-        deliverWebhook(ctx, job, member, {
-          chatName,
-          senderName:
-            sender === SENDER.user ? '主人' : members.get(sender)?.display || sender,
-        });
-        continue;
-      }
-
-      if (member?.driver.type === DRIVER.llm) {
-        // 桥内直连模型：没有外部进程可叫醒，这里直接把投递推进到终态
-        deliverLlm(ctx, job, member, { chatName });
-        continue;
-      }
-
-      // 叫醒正挂着的长轮询：这一步就是「下发唤醒」，桥只通知，不执行任何命令
-      waiters.notify(handle);
-
-      const decision = planner.decide(handle);
-      if (decision.action === 'wake') {
-        planner.markWoken(handle);
-      } else if (decision.action === 'hold') {
-        log.debug(`暂缓唤醒 ${handle}：${decision.reason}`);
-      }
+      if (!member) continue;
+      jobs.push(enqueue(member, { chatId, messageId, text, sender }));
     }
 
     return jobs;
@@ -125,23 +131,19 @@ export function registerMessageRoutes(router, ctx) {
     store.touchChat(chatId);
 
     let jobs = [];
-    if (Array.isArray(explicitTargets) && explicitTargets.length) {
+    if (chat.kind === 'dm') {
+      // 私聊不用 @：说给谁就发给谁。发消息的人如果是成员自己（理论上不该走到这里），不再回投。
+      const peer = chat.peer ? members.get(chat.peer) : null;
+      if (peer && !peer.archivedAt && peer.handle !== sender) {
+        jobs.push(enqueue(peer, { chatId, messageId: message.id, text: body, sender }));
+      }
+    } else if (Array.isArray(explicitTargets) && explicitTargets.length) {
       // 允许显式指定收件人（不一定要在正文里 @）
       const valid = explicitTargets
         .map((h) => members.get(String(h)))
         .filter((m) => m && !m.archivedAt && m.handle !== sender);
       for (const m of valid) {
-        const job = store.createJob({
-          chatId,
-          messageId: message.id,
-          handle: m.handle,
-          requestId: shortId('r_'),
-          text: body,
-          expiresInMs: cfg.jobExpireMs,
-        });
-        jobs.push(job);
-        waiters.notify(m.handle);
-        if (planner.decide(m.handle).action === 'wake') planner.markWoken(m.handle);
+        jobs.push(enqueue(m, { chatId, messageId: message.id, text: body, sender }));
       }
     } else {
       jobs = fanout({ chatId, messageId: message.id, text: body, sender });
@@ -157,14 +159,28 @@ export function registerMessageRoutes(router, ctx) {
     '/api/chats',
     (req, res) => {
       const unread = store.unreadCounts();
-      const chats = store.listChats().map((c) => ({
-        ...c,
-        count: store.countMessages(c.id),
-        last: store.lastMessageOf(c.id),
-        members: store.listMembersOf(c.id),
-        readSeq: store.getReadSeq(c.id),
-        unread: unread[c.id] || 0,
-      }));
+      const chats = store.listChats().map((c) => {
+        // 单聊带上对端的显示信息：侧栏要画它的头像，而不是一个首字母
+        const peerMember = c.kind === 'dm' && c.peer ? members.get(c.peer) : null;
+        return {
+          ...c,
+          peerInfo: peerMember
+            ? {
+                handle: peerMember.handle,
+                display: peerMember.display,
+                avatar: peerMember.avatar,
+                avatarSalt: peerMember.avatarSalt,
+                driverType: peerMember.driver?.type,
+                archived: Boolean(peerMember.archivedAt),
+              }
+            : null,
+          count: store.countMessages(c.id),
+          last: store.lastMessageOf(c.id),
+          members: store.listMembersOf(c.id),
+          readSeq: store.getReadSeq(c.id),
+          unread: unread[c.id] || 0,
+        };
+      });
       sendJson(res, 200, { chats, main: MAIN_CHAT.id });
     },
     { auth: 'owner' },
@@ -199,12 +215,28 @@ export function registerMessageRoutes(router, ctx) {
     { auth: 'owner' },
   );
 
+  /** 开一个与成员的单聊。已有就复用——同一个成员只有一条私聊。 */
+  router.post(
+    '/api/chats/dm',
+    async (req, res) => {
+      const body = await readJson(req, 4096);
+      const handle = String(body.handle || '').trim().toLowerCase();
+      const m = members.get(handle);
+      if (!m || m.archivedAt) throw notFound('成员不存在或已移除');
+      const chat = store.ensureDm(m.handle, m.display);
+      hub.emit('change', { type: 'chat' });
+      sendJson(res, 200, { chat: { ...chat, members: store.listMembersOf(chat.id) } });
+    },
+    { auth: 'owner' },
+  );
+
   router.patch(
     /^\/api\/chats\/([A-Za-z0-9_-]{1,40})$/,
     async (req, res, url, identity, id) => {
       const body = await readJson(req, 16 * 1024);
       const name = String(body.name || '').trim();
-      if (!name) throw badRequest('会话名称不能为空');
+      if (!name) throw badRequest('备注不能为空');
+      if (name.length > cfg.maxChatNameLength) throw badRequest('备注过长');
       const chat = store.renameChat(id, name);
       if (!chat) throw notFound('会话不存在');
       hub.emit('change', { type: 'chat' });
@@ -213,13 +245,20 @@ export function registerMessageRoutes(router, ctx) {
     { auth: 'owner' },
   );
 
+  /** 解散群聊 / 删除私聊：会话从列表消失，成员的归属一并摘掉。 */
   router.delete(
     /^\/api\/chats\/([A-Za-z0-9_-]{1,40})$/,
     (req, res, url, identity, id) => {
-      if (id === MAIN_CHAT.id) throw badRequest('主会话不可删除');
+      if (id === MAIN_CHAT.id) throw badRequest('大厅是主会话，不能解散');
       const chat = store.getChat(id);
       if (!chat) throw notFound('会话不存在');
       store.archiveChat(id);
+      if (chat.kind === 'dm') {
+        // 私聊不在成员的 chats 配置里，只需归档会话本身
+      } else {
+        members.dropChat(id);
+      }
+      log.info(`${chat.kind === 'dm' ? '删除私聊' : '解散群聊'} ${id}（${chat.name}）`);
       hub.emit('change', { type: 'chat' });
       sendJson(res, 200, { ok: true });
     },

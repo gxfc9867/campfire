@@ -46,6 +46,7 @@ export const api = {
 
   chats: () => request('/api/chats'),
   createChat: (name) => request('/api/chats', { method: 'POST', body: { name } }),
+  createDm: (handle) => request('/api/chats/dm', { method: 'POST', body: { handle } }),
   renameChat: (id, name) => request(`/api/chats/${id}`, { method: 'PATCH', body: { name } }),
   deleteChat: (id) => request(`/api/chats/${id}`, { method: 'DELETE' }),
   markRead: (id, seq) => request(`/api/chats/${id}/read`, { method: 'POST', body: { seq } }),

@@ -396,6 +396,7 @@ code {
   padding: 7px 8px;
   border-radius: var(--radius);
   text-align: left;
+  cursor: pointer;
   transition: background 0.12s;
 }
 
@@ -405,6 +406,37 @@ code {
 
 .chat-item.is-active {
   background: var(--bg-active);
+}
+
+/* 会议项上的「⋯」：hover 或键盘聚焦时才出现，平时不占视觉重量 */
+.chat-more {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  display: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+  box-shadow: var(--shadow-1);
+}
+
+.chat-item:hover .chat-more,
+.chat-item:focus-within .chat-more {
+  display: grid;
+  place-items: center;
+}
+
+.chat-more:hover {
+  color: var(--accent);
+}
+
+/* 有「⋯」压着的时候，时间要往左让一点，避免叠在一起 */
+.chat-item:hover .chat-item-time {
+  opacity: 0;
 }
 
 .chat-avatar {
@@ -417,11 +449,36 @@ code {
   color: var(--accent);
   font-size: 13px;
   font-weight: 650;
+  overflow: hidden;
+}
+
+.chat-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 单聊头和群聊头要能一眼分开：群是首字母方块，单聊是真人头像 */
+.chat-avatar-dm {
+  background: var(--bg-active);
 }
 
 .chat-item.is-active .chat-avatar {
   background: var(--accent);
   color: #fff;
+}
+
+/* 单聊标识：小、灰、不抢名字 */
+.chat-kind {
+  margin-left: 5px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text-3);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 500;
+  vertical-align: 1px;
 }
 
 .chat-item-body {
@@ -1501,6 +1558,22 @@ code {
   cursor: pointer;
 }
 
+.member-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.member-card-wire.is-dm {
+  color: var(--accent);
+}
+
+.member-card-wire.is-dm::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--text-3);
+}
+
 .member-card-wire {
   align-self: flex-start;
   font-size: 11px;
@@ -1885,6 +1958,16 @@ code {
 
 /* 窄屏：图标栏隐藏，会话栏变抽屉 */
 @media (max-width: 880px) {
+  /* 触屏没有 hover，「⋯」必须常显，否则单聊/解散这些操作无处可点 */
+  .chat-more {
+    display: grid;
+    place-items: center;
+  }
+
+  .chat-item-time {
+    opacity: 0;
+  }
+
   .app,
   .app.aside-closed,
   .app.aside-open {

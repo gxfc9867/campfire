@@ -354,6 +354,19 @@ export class Members {
     return m;
   }
 
+  /** 群解散后，把会话 id 从所有成员的归属里摘掉，避免成员卡片继续数着已删除的群。 */
+  dropChat(chatId) {
+    this.reload();
+    let changed = 0;
+    for (const m of this.items) {
+      if (!m.chats.includes(chatId)) continue;
+      m.chats = m.chats.filter((c) => c !== chatId);
+      changed++;
+    }
+    if (changed) this.#save();
+    return changed;
+  }
+
   /** 软删除：保留记录，历史消息的 sender 才不会悬空。 */
   archive(handle, expectedEtag) {
     this.reload();

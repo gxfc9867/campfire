@@ -10,14 +10,16 @@ import { $, $$, esc, avatarUrl, initialAvatar, fmtRelative, toast, presenceLabel
 
 let onChanged = () => {};
 let onCompose = () => {};
+let onOpenDm = async () => {};
 let state = { members: [], etag: '', chats: [], presets: [], providers: null, editing: null, drafts: {} };
 
 /** 接入向导的会话状态。key 加下划线前缀表示「只在此处流转，不进持久层」。 */
 let connect = { handle: '', key: '', name: '', driverType: '', timer: null, shown: false };
 
-export function initMembers({ onChanged: cb, onCompose: composeCb } = {}) {
+export function initMembers({ onChanged: cb, onCompose: composeCb, onOpenDm: dmCb } = {}) {
   onChanged = cb || (() => {});
   onCompose = composeCb || (() => {});
+  onOpenDm = dmCb || (async () => {});
   bind();
 }
 
@@ -128,7 +130,25 @@ function renderGrid() {
     wire.textContent = m.driverType === 'llm' || label.cls === 'ok' ? '接入信息' : '接入引导';
     wire.addEventListener('click', () => openConnect(m.handle));
 
-    card.append(hit, wire);
+    // 单聊入口：卡片上直接给，不用先回大厅再找它
+    const dm = document.createElement('button');
+    dm.type = 'button';
+    dm.className = 'text-btn member-card-wire is-dm';
+    dm.textContent = '私聊';
+    dm.addEventListener('click', async () => {
+      close();
+      try {
+        await onOpenDm(m.handle);
+      } catch (ex) {
+        toast(ex.message);
+      }
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'member-card-actions';
+    actions.append(dm, wire);
+
+    card.append(hit, actions);
     grid.append(card);
   }
 }
@@ -431,11 +451,13 @@ function closeEditor() {
 function renderChatChecks(selected) {
   const box = $('#chat-checks');
   box.textContent = '';
-  if (!state.chats.length) {
+  // 单聊不进「成员归属」的可选项：私聊是按成员自动建的，不该在群列表里勾
+  const groups = state.chats.filter((c) => c.kind !== 'dm');
+  if (!groups.length) {
     box.innerHTML = '<p class="empty-note">还没有会话</p>';
     return;
   }
-  for (const c of state.chats) {
+  for (const c of groups) {
     const label = document.createElement('label');
     label.className = 'check';
     const cb = document.createElement('input');

@@ -88,7 +88,19 @@ async function enterApp() {
       .sort((a, b) => (b.last?.createdAt || b.updatedAt || 0) - (a.last?.createdAt || a.updatedAt || 0))
       .find((c) => c.last) || state.chats[0];
   await selectChat(latest?.id || 'main');
-  initMembers({ onChanged: refreshMembers, onCompose: composeForMember });
+  initMembers({ onChanged: refreshMembers, onCompose: composeForMember, onOpenDm: openDm });
+}
+
+/**
+ * 打开与某个成员的单聊：没有就建一条，已有就复用。
+ * 成员管理里点「私聊」最后落到这里。
+ */
+export async function openDm(handle) {
+  const { chat } = await api.createDm(handle);
+  await loadChats();
+  if (state.chatId === chat.id) renderChats();
+  else await selectChat(chat.id);
+  return chat;
 }
 
 /**
@@ -207,37 +219,90 @@ function bindChrome() {
     { passive: true },
   );
 
-  // 会话的右键菜单：改名 / 删除。主会话服务端会拒绝，这里也提前挡一下
-  $('#chat-list').addEventListener('contextmenu', async (e) => {
+  // 会话设置：右键会话，或点标题栏的「⋯」。主会话只允许改备注
+  $('#chat-list').addEventListener('contextmenu', (e) => {
     const item = e.target.closest('.chat-item');
     if (!item) return;
     e.preventDefault();
     const chat = state.chats.find((c) => c.id === item.dataset.chat);
-    if (!chat) return;
+    if (chat) openChatMenu(chat, e.clientX, e.clientY);
+  });
 
-    const act = menuChoice(e.clientX, e.clientY, ['重命名', chat.id === 'main' ? null : '删除会话']);
-    if (act === '重命名') {
-      const name = prompt('新名称', chat.name);
-      if (!name?.trim() || name === chat.name) return;
-      try {
-        await api.renameChat(chat.id, name.trim());
-        loadChats();
-      } catch (ex) {
-        toast(ex.message);
-      }
-    } else if (act === '删除会话') {
-      if (!confirm(`删除「${chat.name}」？消息一并隐藏，不可恢复。`)) return;
-      try {
-        await api.deleteChat(chat.id);
-        if (state.chatId === chat.id) selectChat('main');
-        loadChats();
-      } catch (ex) {
-        toast(ex.message);
-      }
-    }
+  $('#btn-chat-menu').addEventListener('click', (e) => {
+    const chat = currentChat();
+    if (!chat) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    openChatMenu(chat, r.right - 168, r.bottom + 6);
   });
 
   $('#btn-clear-quote').addEventListener('click', clearQuote);
+}
+
+/** 群聊/单聊的设置菜单。入口有两个（右键、标题栏「⋯」），行为完全一致。 */
+async function openChatMenu(chat, x, y) {
+  const isDm = chat.kind === 'dm';
+  const options =
+    chat.id === 'main'
+      ? ['改备注']
+      : [isDm ? '给单聊改备注' : '给群改备注', isDm ? '删除单聊' : '解散群聊'];
+  const act = await menuChoice(x, y, options);
+  if (!act) return;
+  if (act.includes('改备注')) return renameChatFlow(chat);
+  if (act === '解散群聊') return dissolveChat(chat);
+  if (act === '删除单聊') return removeDm(chat);
+}
+
+async function renameChatFlow(chat) {
+  const isDm = chat.kind === 'dm';
+  const name = prompt(
+    isDm ? '给这个单聊起个备注（只改你这边的显示）' : '给这个群起个备注（只改你这边的显示）',
+    chat.name,
+  );
+  if (!name?.trim() || name.trim() === chat.name) return;
+  try {
+    await api.renameChat(chat.id, name.trim());
+    await loadChats();
+    if (state.chatId === chat.id) {
+      $('#chat-name').textContent = name.trim();
+      renderMessages();
+    }
+  } catch (ex) {
+    toast(ex.message);
+  }
+}
+
+async function dissolveChat(chat) {
+  const n = chat.members?.length || 0;
+  const ok = confirm(
+    `解散「${chat.name}」？\n\n` +
+      `· 会话从列表里消失，${n} 位成员的归属一并解除\n` +
+      `· 历史消息不再展示，无法恢复\n\n` +
+      `只想换个名字的话，选「给群改备注」。`,
+  );
+  if (!ok) return;
+  try {
+    await api.deleteChat(chat.id);
+    if (state.chatId === chat.id) await selectChat('main');
+    await loadChats();
+    toast(`已解散「${chat.name}」`);
+  } catch (ex) {
+    toast(ex.message);
+  }
+}
+
+async function removeDm(chat) {
+  const ok = confirm(
+    `删除与「${chat.name}」的单聊？\n\n` +
+      `消息会从列表隐藏，但不会丢——之后在成员那边点「私聊」，历史还在。`,
+  );
+  if (!ok) return;
+  try {
+    await api.deleteChat(chat.id);
+    if (state.chatId === chat.id) await selectChat('main');
+    await loadChats();
+  } catch (ex) {
+    toast(ex.message);
+  }
 }
 
 /** 极简右键菜单：一个临时浮层，点别处就消失。 */
@@ -245,8 +310,9 @@ function menuChoice(x, y, options) {
   return new Promise((resolve) => {
     const menu = document.createElement('div');
     menu.className = 'ctx-menu';
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
+    // 贴着右边缘或底部时不越界：菜单宽约 150、高按项数估
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 170))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 40 - options.length * 34))}px`;
     for (const opt of options) {
       if (!opt) continue;
       const b = document.createElement('button');
@@ -294,25 +360,61 @@ function renderChats() {
   }
 
   for (const c of shown) {
-    const btn = document.createElement('button');
-    btn.className = `chat-item${c.id === state.chatId ? ' is-active' : ''}`;
-    btn.dataset.chat = c.id; // 右键菜单靠这个定位，别用名字匹配（名字会转义）
+    const isDm = c.kind === 'dm';
+    // 外层是 div 不是 button：里面有「会话设置」按钮，button 不能嵌套 button
+    const item = document.createElement('div');
+    item.className = `chat-item${c.id === state.chatId ? ' is-active' : ''}${isDm ? ' is-dm' : ''}`;
+    item.dataset.chat = c.id; // 右键菜单靠这个定位，别用名字匹配（名字会转义）
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
     const preview = c.last
       ? `${c.last.sender === 'user' ? '你' : nameOf(c.last.sender)}：${c.last.text}`
-      : '还没有消息';
-    btn.innerHTML =
-      `<span class="chat-avatar">${esc(c.name.slice(0, 1).toUpperCase())}</span>` +
+      : isDm
+        ? '还没聊过，说第一句吧'
+        : '还没有消息';
+    const avatar = isDm
+      ? `<span class="chat-avatar chat-avatar-dm"><img src="${esc(
+          avatarUrl(c.peerInfo || { display: c.name }, BASE),
+        )}" alt="" loading="lazy" /></span>`
+      : `<span class="chat-avatar">${esc(c.name.slice(0, 1).toUpperCase())}</span>`;
+    item.innerHTML =
+      avatar +
       `<span class="chat-item-body">` +
       `<span class="chat-item-top">` +
-      `<span class="chat-item-name">${esc(c.name)}</span>` +
+      `<span class="chat-item-name">${esc(c.name)}${isDm ? '<i class="chat-kind">私聊</i>' : ''}</span>` +
       `<span class="chat-item-time">${c.last ? fmtTime(c.last.createdAt) : ''}</span>` +
       `</span>` +
       `<span class="chat-item-preview">${esc(preview)}</span>` +
       `</span>` +
       (c.unread ? `<span class="chat-unread">${c.unread > 99 ? '99+' : c.unread}</span>` : '');
-    btn.addEventListener('click', () => selectChat(c.id));
-    list.append(btn);
+
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'chat-more';
+    more.title = isDm ? '单聊设置' : '群聊设置';
+    more.setAttribute('aria-label', more.title);
+    more.textContent = '⋯';
+    more.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const r = more.getBoundingClientRect();
+      openChatMenu(c, r.left - 120, r.bottom + 4);
+    });
+    item.append(more);
+
+    item.addEventListener('click', () => selectChat(c.id));
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        selectChat(c.id);
+      }
+    });
+    list.append(item);
   }
+}
+
+/** 当前会话对象。单聊要拿 peerInfo，所以统一从这里取，不去翻 DOM 文本。 */
+function currentChat() {
+  return state.chats.find((c) => c.id === state.chatId) || null;
 }
 
 async function selectChat(id) {
@@ -324,7 +426,12 @@ async function selectChat(id) {
   state.hasOlder = false;
   state.awayCount = 0;
   updateTitleBadge();
-  $('#chat-name').textContent = state.chats.find((c) => c.id === id)?.name || id;
+  const chat = state.chats.find((c) => c.id === id) || null;
+  const isDm = chat?.kind === 'dm';
+  $('#chat-name').textContent = chat?.name || id;
+  // 私聊里没有「叫醒谁」的问题：说给谁就发给谁，提示语也要跟着换
+  $('#input').placeholder = isDm ? '直接说，消息只发给它' : '说点什么，@ 可以叫醒成员';
+  $('#composer-hint').textContent = isDm ? '私聊不用 @ · Enter 发送' : 'Enter 发送 · Shift+Enter 换行';
   renderChats();
   await Promise.all([loadMessages(), refreshMembers(), loadJobs()]);
   connectEvents();
@@ -447,6 +554,13 @@ function renderOlderSentinel() {
 
 function updateSub() {
   const n = state.messages.length;
+  const chat = currentChat();
+  if (chat?.kind === 'dm') {
+    const m = state.members[0];
+    const label = m ? presenceLabel(m.presence, m.driverType) : null;
+    $('#chat-sub').textContent = `${n} 条消息 · 单聊${label ? ` · 对方${label.text}` : ''}`;
+    return;
+  }
   const online = state.members.filter((m) => m.presence?.reachable).length;
   $('#chat-sub').textContent = `${n} 条消息 · ${state.members.length} 位成员（${online} 位可达）`;
 }
@@ -548,6 +662,9 @@ function emptyState(title, text) {
 
 /** 群简介：把「这个群是什么、怎么叫醒成员」讲清楚，同时露出在场的人。 */
 function buildPinned() {
+  const chat = currentChat();
+  if (chat?.kind === 'dm') return buildDmPinned(chat);
+
   const div = document.createElement('div');
   div.className = 'pinned';
   const faces = state.members
@@ -565,6 +682,28 @@ function buildPinned() {
       state.members.length
         ? `${esc(names)} 在这个群里。用 <code>@名字</code> 叫醒成员，cli 型首次响应约 5 秒。`
         : '这个群还没有成员。到「成员管理」把 agent 拉进来，然后 <code>@它</code> 说话。'
+    }</div>`;
+  return div;
+}
+
+/** 单聊的置顶块：对方是谁、现在什么状态，比群简介更该说的是这两件事。 */
+function buildDmPinned(chat) {
+  const div = document.createElement('div');
+  div.className = 'pinned pinned-dm';
+  const m = state.members[0];
+  const label = m ? presenceLabel(m.presence, m.driverType) : null;
+  const name = m?.display || chat.peerInfo?.display || chat.name;
+  div.innerHTML =
+    `<div class="pinned-top">` +
+    `<span class="pinned-label">单聊</span>` +
+    `<span class="pinned-title">${esc(name)}</span>` +
+    `<span class="pinned-faces">${m ? `<img src="${esc(avatarUrl(m, BASE))}" alt="" />` : ''}</span>` +
+    (label ? `<span class="badge ${label.cls}">${label.text}</span>` : '') +
+    `</div>` +
+    `<div class="pinned-text">${
+      m?.persona
+        ? esc(m.persona.slice(0, 140))
+        : '这是你和它的单聊。消息直接发给它，不用 <code>@</code>；它说什么也只有你能看到。'
     }</div>`;
   return div;
 }
@@ -810,6 +949,8 @@ function hintWaking(jobs = []) {
 // ── @ 菜单 ──────────────────────────────────────────────────────────
 
 function updateMentionMenu() {
+  // 单聊里没有「叫醒谁」的问题，@ 菜单只会在自己脑子里造成歧义
+  if (currentChat()?.kind === 'dm') return closeMentionMenu();
   const input = $('#input');
   const before = input.value.slice(0, input.selectionStart);
   const m = /(?:^|\s)@([^\s@]{0,20})$/.exec(before);

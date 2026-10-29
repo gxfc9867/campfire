@@ -89,6 +89,13 @@ export class Store {
     if (!cols.includes('last_read_seq')) {
       this.db.exec('ALTER TABLE chats ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0');
     }
+    // 单聊：kind='dm' 时 peer 指向那唯一的成员。老库全部按群聊处理。
+    if (!cols.includes('kind')) {
+      this.db.exec("ALTER TABLE chats ADD COLUMN kind TEXT NOT NULL DEFAULT 'group'");
+    }
+    if (!cols.includes('peer')) {
+      this.db.exec('ALTER TABLE chats ADD COLUMN peer TEXT');
+    }
   }
 
   close() {
@@ -130,15 +137,44 @@ export class Store {
     return this.getChat(id);
   }
 
+  /**
+   * 与某个成员的单聊。一个成员只有一个私聊会话，重复点「私聊」不会再造一个。
+   * 曾经删掉过就复活它——历史消息还在，删了再进来能接上。
+   */
+  ensureDm(handle, name) {
+    const id = `dm_${handle}`;
+    const now = Date.now();
+    const existing = this.getChat(id);
+    if (existing) {
+      if (existing.archivedAt) {
+        this.db
+          .prepare('UPDATE chats SET archived_at = NULL, updated_at = ? WHERE id = ?')
+          .run(now, id);
+      }
+      return this.getChat(id);
+    }
+    this.db
+      .prepare(
+        'INSERT INTO chats (id, name, kind, peer, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(id, name, 'dm', handle, now, now);
+    return this.getChat(id);
+  }
+
   renameChat(id, name) {
     this.db.prepare('UPDATE chats SET name = ?, updated_at = ? WHERE id = ?').run(name, Date.now(), id);
     return this.getChat(id);
   }
 
+  /** 解散群聊 / 删除私聊：会话从列表消失，成员归属一并清掉。 */
   archiveChat(id) {
+    const now = Date.now();
     this.db
       .prepare('UPDATE chats SET archived_at = ?, updated_at = ? WHERE id = ?')
-      .run(Date.now(), Date.now(), id);
+      .run(now, now, id);
+    this.db
+      .prepare('UPDATE chat_members SET archived_at = ? WHERE chat_id = ? AND archived_at IS NULL')
+      .run(now, id);
   }
 
   /** 有新消息时刷新会话排序。 */
@@ -314,6 +350,10 @@ export class Store {
   }
 
   listMembersOf(chatId) {
+    // 单聊的成员就是 peer 本身：不写 chat_members，成员退群或被移除都不该
+    // 把私聊的归属关系一起带走。
+    const chat = this.getChat(chatId);
+    if (chat?.kind === 'dm') return chat.peer ? [chat.peer] : [];
     return this.db
       .prepare('SELECT handle FROM chat_members WHERE chat_id = ? AND archived_at IS NULL')
       .all(chatId)
@@ -447,6 +487,8 @@ function mapChat(r) {
   return {
     id: r.id,
     name: r.name,
+    kind: r.kind || 'group',
+    peer: r.peer || null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     archivedAt: r.archived_at,
