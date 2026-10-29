@@ -1,0 +1,42 @@
+# 围炉 NAS 部署编排：campfire 主服务 + DSH 接入适配器。
+# 与 dsh-bridge 完全独立——本文件不读写 /vol2/@appdata/dsh-docker 下的任何配置，
+# 只把桥已备好的凭据/密钥/隧道「只读」借用给适配器。
+#
+# 部署目录建议：/vol2/@appdata/campfire
+# 口令：在同目录放 .env，写一行 CAMPFIRE_PASSWORD=你的口令
+# 适配器配置：adapters/dsh/.env（模板见 adapters/dsh/.env.example）
+
+services:
+  campfire:
+    build: .
+    image: campfire:local
+    container_name: campfire
+    ports:
+      - "8099:8099"          # 与 dsh-bridge 的 8097/8098 不冲突；冲突就改左边
+    environment:
+      PORT: "8099"
+      DATA_DIR: /app/data
+      OWNER_PASSWORD: ${CAMPFIRE_PASSWORD:?请先在同目录创建 .env 并写入 CAMPFIRE_PASSWORD}
+    volumes:
+      - ./data:/app/data
+    restart: on-failure:5
+
+  dsh-agents:
+    build: ./adapters/dsh
+    image: campfire-dsh-agents:local
+    container_name: campfire-dsh-agents
+    # host 网络：直连 NAS 本机三样东西——DSH Web Host(3081)、桥的 SSH 隧道(19387)、campfire(8099)
+    network_mode: host
+    env_file:
+      - adapters/dsh/.env
+    environment:
+      CAMPFIRE_URL: http://127.0.0.1:8099
+    volumes:
+      - ./adapters/dsh/data:/app/data
+      # 恭喜的 Cookie 签发密钥（桥在用的同一份，只读借用）
+      - /vol2/@appdata/dsh-docker/data/.credentials.yaml:/cred/credentials.yaml:ro
+      # 发财的 SSH 私钥（桥在用的同一份，只读借用；用于兜底同步 Cookie）
+      - /vol2/@appdata/dsh-docker/home/NAS/_tools/ssh/id_ed25519:/keys/pc_id_ed25519:ro
+      # 桥维护的发财 Cookie 缓存（只读借用；路径按 NAS 实际情况核对）
+      - /vol2/@appdata/dsh-docker/bridge/data/.desktop-cookie-cache:/pc/.desktop-cookie-cache:ro
+    restart: on-failure:5

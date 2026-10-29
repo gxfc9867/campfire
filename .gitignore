@@ -17,3 +17,9 @@ Thumbs.db
 .idea/
 .vscode/
 node_modules/
+
+# DSH 适配器运行数据
+adapters/dsh/data/
+
+# 部署包
+*.tar.gz
