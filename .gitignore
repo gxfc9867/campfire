@@ -23,3 +23,6 @@ adapters/dsh/data/
 
 # 部署包
 *.tar.gz
+
+# 本地冒烟脚本
+.smoke3/
