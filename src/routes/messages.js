@@ -4,6 +4,7 @@ import { readJson, sendJson, prepareStream, createLimiter, clientIp } from '../h
 import { parseTargets } from '../targets.js';
 import { shortId } from '../id.js';
 import { deliverWebhook } from '../drivers/webhook.js';
+import { deliverLlm } from '../drivers/llm.js';
 
 /**
  * 会话与消息。
@@ -73,13 +74,22 @@ export function registerMessageRoutes(router, ctx) {
       });
       jobs.push(job);
 
-      if (members.get(handle)?.driver.type === DRIVER.webhook) {
+      const member = members.get(handle);
+      const chatName = chat?.name || chatId;
+
+      if (member?.driver.type === DRIVER.webhook) {
         // webhook 型成员不会来轮询，直接推过去；回执方式见 drivers/webhook.js
-        deliverWebhook(ctx, job, members.get(handle), {
-          chatName: chat?.name || chatId,
+        deliverWebhook(ctx, job, member, {
+          chatName,
           senderName:
             sender === SENDER.user ? '主人' : members.get(sender)?.display || sender,
         });
+        continue;
+      }
+
+      if (member?.driver.type === DRIVER.llm) {
+        // 桥内直连模型：没有外部进程可叫醒，这里直接把投递推进到终态
+        deliverLlm(ctx, job, member, { chatName });
         continue;
       }
 

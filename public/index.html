@@ -227,7 +227,11 @@
               <span class="field-label">驱动方式<em>决定它怎么收到消息</em></span>
               <div class="radio-row" id="driver-row">
                 <label class="radio">
-                  <input type="radio" name="driverType" value="pull" checked />
+                  <input type="radio" name="driverType" value="llm" checked />
+                  <span><b>大模型直连</b><em>填个密钥就能说话，不用装任何东西</em></span>
+                </label>
+                <label class="radio">
+                  <input type="radio" name="driverType" value="pull" />
                   <span><b>pull</b><em>成员自己来拉，不用唤醒</em></span>
                 </label>
                 <label class="radio">
@@ -239,6 +243,41 @@
                   <span><b>webhook</b><em>桥推送到成员地址</em></span>
                 </label>
               </div>
+            </div>
+
+            <div class="field" id="llm-fields" hidden>
+              <div class="field-row">
+                <label class="field">
+                  <span class="field-label">服务商</span>
+                  <select name="provider" id="llm-provider"></select>
+                </label>
+                <label class="field">
+                  <span class="field-label">模型</span>
+                  <input name="model" placeholder="deepseek-chat" spellcheck="false" />
+                </label>
+              </div>
+              <label class="field">
+                <span class="field-label">API 密钥<em>只写在本机 data/members.json，接口不回传明文</em></span>
+                <input name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" />
+              </label>
+              <p class="field-hint" id="llm-key-hint" hidden>已保存密钥。留空表示不修改。</p>
+              <details class="field-adv">
+                <summary>接口地址与采样参数</summary>
+                <label class="field">
+                  <span class="field-label">接口地址<em>OpenAI 兼容，末尾会自动补 /chat/completions</em></span>
+                  <input name="baseUrl" placeholder="https://api.deepseek.com/v1" spellcheck="false" />
+                </label>
+                <div class="field-row">
+                  <label class="field">
+                    <span class="field-label">温度<em>越高越发散，0–2</em></span>
+                    <input name="temperature" type="number" min="0" max="2" step="0.1" placeholder="0.8" />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">最长字数</span>
+                    <input name="maxTokens" type="number" min="32" max="8192" step="32" placeholder="800" />
+                  </label>
+                </div>
+              </details>
             </div>
 
             <div class="field" id="cli-fields" hidden>
@@ -297,44 +336,58 @@
             <span id="connect-status-text">等待接入…</span>
           </div>
 
-          <p class="connect-lead">
+          <p class="connect-lead" id="connect-lead">
             成员已经建好了。把它接到<b>装了 agent 命令的那台机器</b>上，三步就通。
           </p>
 
-          <div class="connect-step">
-            <div class="step-label"><span class="step-num">1</span>存一份配置</div>
-            <p class="step-note">放到 sidecar 目录下，命名为 <code>sidecar.config.json</code>。</p>
-            <div class="code-box">
-              <div class="code-head">
-                <span>sidecar.config.json</span>
-                <button type="button" class="text-btn" data-copy="connect-config">复制</button>
+          <div id="connect-manual">
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">1</span>存一份配置</div>
+              <p class="step-note">放到 sidecar 目录下，命名为 <code>sidecar.config.json</code>。</p>
+              <div class="code-box">
+                <div class="code-head">
+                  <span>sidecar.config.json</span>
+                  <button type="button" class="text-btn" data-copy="connect-config">复制</button>
+                </div>
+                <pre id="connect-config"></pre>
               </div>
-              <pre id="connect-config"></pre>
+            </div>
+
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">2</span>启动</div>
+              <p class="step-note">在项目目录里跑。它会一直挂着，替你收消息、起进程、回话。</p>
+              <div class="code-box">
+                <div class="code-head">
+                  <span>终端</span>
+                  <button type="button" class="text-btn" data-copy="connect-cmd">复制</button>
+                </div>
+                <pre id="connect-cmd"></pre>
+              </div>
+            </div>
+
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">3</span>验证</div>
+              <p class="step-note">不装 sidecar 也能先验一下密钥通不通，返回 JSON 就对了。</p>
+              <div class="code-box">
+                <div class="code-head">
+                  <span>curl</span>
+                  <button type="button" class="text-btn" data-copy="connect-curl">复制</button>
+                </div>
+                <pre id="connect-curl"></pre>
+              </div>
             </div>
           </div>
 
-          <div class="connect-step">
-            <div class="step-label"><span class="step-num">2</span>启动</div>
-            <p class="step-note">在项目目录里跑。它会一直挂着，替你收消息、起进程、回话。</p>
-            <div class="code-box">
-              <div class="code-head">
-                <span>终端</span>
-                <button type="button" class="text-btn" data-copy="connect-cmd">复制</button>
-              </div>
-              <pre id="connect-cmd"></pre>
-            </div>
-          </div>
-
-          <div class="connect-step">
-            <div class="step-label"><span class="step-num">3</span>验证</div>
-            <p class="step-note">不装 sidecar 也能先验一下密钥通不通，返回 JSON 就对了。</p>
-            <div class="code-box">
-              <div class="code-head">
-                <span>curl</span>
-                <button type="button" class="text-btn" data-copy="connect-curl">复制</button>
-              </div>
-              <pre id="connect-curl"></pre>
-            </div>
+          <div class="connect-ready" id="connect-ready" hidden>
+            <p class="connect-lead">
+              这个成员由围炉自己驱动：模型接口和密钥已经存好了。
+              <b>不用 sidecar，不用开任何进程</b>，回群里 @ 它就能说话。
+            </p>
+            <button type="button" class="primary-btn" id="btn-try-member">去群里跟它说句话</button>
+            <p class="field-hint">
+              想换模型或密钥？关掉这页，点成员卡片就能改。密钥只存在本机
+              <code>data/members.json</code>。
+            </p>
           </div>
 
           <div class="connect-key">

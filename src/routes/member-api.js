@@ -1,4 +1,5 @@
-import { MEMBER_STATE, DRIVER, SENDER, JOB_STATUS, MENTION_OWNER_RE } from '../constants.js';
+import { MEMBER_STATE, DRIVER, SENDER, JOB_STATUS } from '../constants.js';
+import { recordMemberReply } from '../reply.js';
 import { badRequest, forbidden, notFound, tooMany } from '../errors.js';
 import { readJson, sendJson } from '../http/util.js';
 
@@ -105,41 +106,13 @@ export function registerMemberRoutes(router, ctx) {
       if (!job) throw notFound('请求不存在或已过期');
       if (job.handle !== handle) throw forbidden('这条请求不属于你');
 
-      // 幂等：同一个 requestId 重复提交只认第一次，唤醒两次不会冒出两条回复
-      if (job.status === JOB_STATUS.done) {
-        const existing = store.getMessageByJobId(job.id);
-        return sendJson(res, 200, { ok: true, duplicate: true, message: existing });
-      }
-
-      const message = store.insertMessage({
-        chatId: job.chatId,
-        sender: handle,
-        text,
-        jobId: job.id,
-        replyTo: job.messageId,
-        clientId: body.clientId || null,
-        // 「@我」的判定在服务端做完，前端只看标记：
-        // ① 回复里显式写了 @主人/@me；② 这条回复本来就是回应主人发的消息
-        meta: {
-          mentionsOwner:
-            MENTION_OWNER_RE.test(text) || store.getMessage(job.messageId)?.sender === SENDER.user,
-        },
-      });
-      store.finishJob(job.id, JOB_STATUS.done);
-      store.touchChat(job.chatId);
-      hub.emit('change', { type: 'message', chatId: job.chatId, seq: message.seq });
-
-      // 成员回复里 @ 了别的成员：允许接力，深度限制由 fanout 把关（3 跳封顶）
-      if (text.includes('@') && typeof ctx.fanout === 'function') {
-        try {
-          ctx.fanout({ chatId: job.chatId, messageId: message.id, text, sender: handle });
-        } catch (e) {
-          log.warn(`接力投递失败：${e.message}`);
-        }
+      const result = recordMemberReply(ctx, { handle, job, text, clientId: body.clientId || null });
+      if (result.duplicate) {
+        return sendJson(res, 200, { ok: true, duplicate: true, message: result.message });
       }
 
       log.debug(`${handle} 回执 ${requestId}`);
-      sendJson(res, 200, { ok: true, message });
+      sendJson(res, 200, { ok: true, message: result.message });
     },
     { auth: 'member' },
   );

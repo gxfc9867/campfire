@@ -50,7 +50,8 @@ DELETE /api/members/:handle            → { ok, etag }   软删除
 POST   /api/members/:handle/restore    → { member, etag }
 POST   /api/members/:handle/rotate     → { handle, key }
 PUT    /api/members/:handle/memory     { digest } → { digest, updatedAt, version }
-POST   /api/members/:handle/probe      → 桥侧连通性检查（不起进程）
+POST   /api/members/:handle/probe      → 桥侧连通性检查（llm 型真调一次模型，其余不起进程）
+GET    /api/llm-providers              → { providers }   大模型服务商预设
 GET    /api/avatars                    → { presets: [{ id, url }], initial }
 ```
 
@@ -61,7 +62,7 @@ GET    /api/avatars                    → { presets: [{ id, url }], initial }
 **成员视图里有两处刻意的处理：**
 
 - 驱动配置会脱敏：`env` 的值一律打码，紧跟 `--api-key` / `--token` 的参数打码，
-  `sk-…` 形态的字符串打码。
+  `sk-…` 形态的字符串打码。llm 驱动的 `apiKey` 恒为 `****`，只附一个 `hasKey` 布尔。
 - `keyMask` 只给前后几位（`qady****wn`），完整密钥要单独取。
 
 ### 状态

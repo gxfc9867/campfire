@@ -26,11 +26,36 @@ export const MEMBER_STATE = {
   wake: 'wake',
 };
 
-/** 驱动类型。pull 由成员自己来取，cli 由 sidecar 起进程，webhook 由桥推。 */
+/**
+ * 驱动类型。
+ * pull    —— 成员自己来取（任意语言/任意机器）
+ * cli     —— sidecar 在宿主机起进程
+ * webhook —— 桥推给成员暴露的 HTTP 地址
+ * llm     —— 桥内直连大模型接口，无需任何外部进程
+ *
+ * 加 llm 的理由：前三种都要用户先写点东西（脚本/配置/服务），
+ * 而「先看看真 agent 在群里什么样」这个需求，本该只要一把 key。
+ * llm 把这段门槛压到「填三个框」，也是四种驱动里唯一零部署的。
+ */
 export const DRIVER = {
   pull: 'pull',
   cli: 'cli',
   webhook: 'webhook',
+  llm: 'llm',
+};
+
+/**
+ * 大模型服务商预设。
+ * 全部走 OpenAI 兼容的 /chat/completions，所以「自定义」也能接任何自建网关。
+ * 模型名只给保守默认，界面上可改——模型迭代比版本号快，写死会过期。
+ */
+export const LLM_PROVIDERS = {
+  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  moonshot: { label: 'Kimi（月之暗面）', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  dashscope: { label: '通义千问（阿里云）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  zhipu: { label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+  custom: { label: '自定义 / 自建网关', baseUrl: '', model: '' },
 };
 
 /**

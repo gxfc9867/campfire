@@ -79,6 +79,9 @@ export class Presence {
    * 「可唤醒」这一档会永远不出现，前端就退化成在线-离线两态。
    */
   ready(handle, driverType) {
+    // llm 型没有外部连接可等：调用发生在桥的进程里，模型接口通不通由调用结果说话，
+    // 不能因为「没人来轮询」就把它显示成离线。
+    if (driverType === DRIVER.llm) return true;
     const r = this.map.get(handle);
     if (!r || !this.reachable(handle)) return false;
     if (driverType === DRIVER.cli) return (r.running || 0) > 0;
@@ -106,7 +109,7 @@ export class Presence {
    */
   snapshot(handle, driverType = DRIVER.pull) {
     const r = this.map.get(handle);
-    const reachable = this.reachable(handle);
+    const reachable = driverType === DRIVER.llm || this.reachable(handle);
     const ready = this.ready(handle, driverType);
     return {
       reachable,

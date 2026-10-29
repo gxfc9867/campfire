@@ -88,7 +88,21 @@ async function enterApp() {
       .sort((a, b) => (b.last?.createdAt || b.updatedAt || 0) - (a.last?.createdAt || a.updatedAt || 0))
       .find((c) => c.last) || state.chats[0];
   await selectChat(latest?.id || 'main');
-  initMembers({ onChanged: refreshMembers });
+  initMembers({ onChanged: refreshMembers, onCompose: composeForMember });
+}
+
+/**
+ * 接入页的「去群里跟它说句话」落到这里：切到主会话，把一句现成的开场白填好。
+ * 刻意不代替用户按发送——发什么、发不发，主动权在人手里。
+ */
+async function composeForMember({ display }) {
+  const target = state.chats.find((c) => c.id === 'main') || state.chats[0];
+  if (target && target.id !== state.chatId) await selectChat(target.id);
+  const input = $('#input');
+  if (!input) return;
+  input.value = `@${display} 用一句话介绍你自己`;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 function bindLogin() {

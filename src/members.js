@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { HANDLE_RE, DRIVER, AVATAR_PRESET_COUNT } from './constants.js';
+import { HANDLE_RE, DRIVER, AVATAR_PRESET_COUNT, LLM_PROVIDERS } from './constants.js';
 import { badRequest, conflict, notFound } from './errors.js';
 import { randomKey } from './config.js';
 import { logger } from './logger.js';
@@ -50,7 +50,7 @@ function normalize(input, prev = null) {
   const base = { ...defaults(), ...(prev || {}) };
   const display = String(input.display ?? base.display ?? handle).trim().slice(0, 40) || handle;
 
-  const driver = normalizeDriver(input.driver ?? base.driver);
+  const driver = normalizeDriver(input.driver ?? base.driver, base.driver);
 
   const chats = Array.isArray(input.chats ?? base.chats)
     ? [...new Set((input.chats ?? base.chats).map((c) => String(c).trim()).filter(Boolean))].slice(0, 50)
@@ -83,7 +83,7 @@ function normalize(input, prev = null) {
   };
 }
 
-function normalizeDriver(d) {
+function normalizeDriver(d, prev = null) {
   const type = String(d?.type || DRIVER.pull);
   if (!Object.values(DRIVER).includes(type)) {
     throw badRequest(`driver.type 必须是 ${Object.values(DRIVER).join(' / ')}`);
@@ -109,7 +109,39 @@ function normalizeDriver(d) {
     if (!/^https?:\/\//.test(url)) throw badRequest('webhook 驱动必须提供 http(s) 地址');
     return { type, url, secret: String(d.secret || ''), timeoutMs: clampInt(d.timeoutMs, 1_000, 120_000, 30_000) };
   }
+  if (type === DRIVER.llm) {
+    const provider = LLM_PROVIDERS[d.provider] ? String(d.provider) : 'custom';
+    const fallback = LLM_PROVIDERS[provider];
+    const baseUrl = String(d.baseUrl || fallback.baseUrl || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//.test(baseUrl)) throw badRequest('大模型驱动需要填写 http(s) 接口地址');
+    const model = String(d.model || fallback.model || '').trim();
+    if (!model) throw badRequest('大模型驱动需要填写模型名');
+
+    // 密钥留空或传回打码值都表示「不修改」——编辑成员时不该被逼着重敲一遍 key
+    const raw = String(d.apiKey ?? '').trim();
+    const keepPrev = !raw || raw === '****';
+    const apiKey = keepPrev ? String(prev?.type === DRIVER.llm ? prev.apiKey || '' : '') : raw;
+
+    return {
+      type,
+      provider,
+      baseUrl,
+      model,
+      apiKey,
+      temperature: clampNum(d.temperature, 0, 2, 0.8),
+      maxTokens: clampInt(d.maxTokens, 32, 8_192, 800),
+      timeoutMs: clampInt(d.timeoutMs, 5_000, 180_000, 60_000),
+      // 关掉它，模型就只按「一条群消息」说话，不去 @ 别人，避免自动接力失控
+      allowMentions: d.allowMentions === undefined ? true : Boolean(d.allowMentions),
+    };
+  }
   return { type: DRIVER.pull };
+}
+
+function clampNum(v, min, max, def) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, n));
 }
 
 function normalizeAvatar(v) {
@@ -142,6 +174,11 @@ export function maskDriver(driver) {
     out.env = Object.fromEntries(Object.keys(out.env).map((k) => [k, '****']));
   }
   if (out.secret) out.secret = '****';
+  // 大模型密钥：仅回一个「配没配」的信号，前端据此显示「已保存，留空不修改」
+  if (out.type === DRIVER.llm) {
+    out.hasKey = Boolean(out.apiKey);
+    out.apiKey = out.hasKey ? '****' : '';
+  }
   if (Array.isArray(out.args)) {
     out.args = out.args.map((a, i, arr) => {
       if (/(key|token|secret|password)$/i.test(String(arr[i - 1] || '').replace(/^--?/, ''))) return '****';

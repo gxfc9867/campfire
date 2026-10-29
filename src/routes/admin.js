@@ -1,7 +1,8 @@
-import { MEMBER_STATE, DRIVER, AVATAR_PRESET_COUNT } from '../constants.js';
+import { MEMBER_STATE, DRIVER, AVATAR_PRESET_COUNT, LLM_PROVIDERS } from '../constants.js';
 import { badRequest, notFound, tooMany } from '../errors.js';
 import { readJson, sendJson, clientIp, createLimiter } from '../http/util.js';
 import { publicView } from '../members.js';
+import { probeLlm } from '../drivers/llm.js';
 
 /**
  * 管理侧接口：登录、健康检查、成员管理、任务面板。
@@ -207,17 +208,50 @@ export function registerAdminRoutes(router, ctx) {
     { auth: 'owner' },
   );
 
-  /** 测试按钮的「桥侧检查」：只验证密钥与通道，不真的拉起进程。 */
+  /**
+   * 测试按钮：llm 型真的发一次请求（否则「连不连得上」只能靠猜），
+   * 其它型只验证密钥与通道，不拉起进程。
+   */
   router.post(
     /^\/api\/members\/([a-z][a-z0-9_-]{0,31})\/probe$/,
-    (req, res, url, identity, handle) => {
+    async (req, res, url, identity, handle) => {
       const m = members.get(handle);
       if (!m) throw notFound('成员不存在');
       const p = presence.snapshot(handle, m.driver.type);
       const decision = planner.decide(handle);
+
+      if (m.driver.type === DRIVER.llm) {
+        const t0 = Date.now();
+        try {
+          const out = await probeLlm(m.driver);
+          return sendJson(res, 200, {
+            handle,
+            driverType: m.driver.type,
+            ok: true,
+            reachable: true,
+            ready: true,
+            latencyMs: out.latencyMs,
+            model: out.model,
+            reply: out.text.slice(0, 80),
+            hint: `模型已连通（${out.model}，${(out.latencyMs / 1000).toFixed(1)} 秒）`,
+          });
+        } catch (e) {
+          return sendJson(res, 200, {
+            handle,
+            driverType: m.driver.type,
+            ok: false,
+            reachable: true,
+            ready: true,
+            latencyMs: Date.now() - t0,
+            hint: e.message,
+          });
+        }
+      }
+
       sendJson(res, 200, {
         handle,
         driverType: m.driver.type,
+        ok: p.reachable,
         reachable: p.reachable,
         ready: p.ready,
         state: p.state,
@@ -231,6 +265,15 @@ export function registerAdminRoutes(router, ctx) {
               : 'sidecar 未连接：检查 sidecar 是否启动、桥地址与密钥是否正确'
             : '该成员由自己主动拉取，桥不负责唤醒',
       });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 大模型服务商预设。前端据此渲染下拉框，避免两边各写一份列表慢慢漂移。 */
+  router.get(
+    '/api/llm-providers',
+    (req, res) => {
+      sendJson(res, 200, { providers: LLM_PROVIDERS });
     },
     { auth: 'owner' },
   );

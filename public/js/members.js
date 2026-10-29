@@ -9,13 +9,15 @@ import { $, $$, esc, avatarUrl, initialAvatar, fmtRelative, toast, presenceLabel
  */
 
 let onChanged = () => {};
-let state = { members: [], etag: '', chats: [], presets: [], editing: null, drafts: {} };
+let onCompose = () => {};
+let state = { members: [], etag: '', chats: [], presets: [], providers: null, editing: null, drafts: {} };
 
 /** 接入向导的会话状态。key 加下划线前缀表示「只在此处流转，不进持久层」。 */
-let connect = { handle: '', key: '', name: '', timer: null, shown: false };
+let connect = { handle: '', key: '', name: '', driverType: '', timer: null, shown: false };
 
-export function initMembers({ onChanged: cb } = {}) {
+export function initMembers({ onChanged: cb, onCompose: composeCb } = {}) {
   onChanged = cb || (() => {});
+  onCompose = composeCb || (() => {});
   bind();
 }
 
@@ -38,6 +40,11 @@ function bind() {
   $$('input[name="driverType"]').forEach((r) =>
     r.addEventListener('change', () => syncDriverFields()),
   );
+
+  // 换服务商就把地址和模型名带过去，省得用户去翻文档抄 URL
+  $('#llm-provider')?.addEventListener('change', onProviderChange);
+
+  $('#btn-try-member')?.addEventListener('click', tryMember);
 
   // 备注名变化时实时更新预览头像上的字
   $('#editor-form').elements.display?.addEventListener('input', updateAvatarPreview);
@@ -93,6 +100,8 @@ function renderGrid() {
     av.append(img);
 
     const label = presenceLabel(m.presence, m.driverType);
+    // 大模型成员把模型名显示出来比显示 "llm" 有用：一眼知道它是哪个脑子
+    const driverText = m.driverType === 'llm' ? m.driver?.model || '大模型' : m.driverType;
     const main = document.createElement('div');
     main.className = 'member-card-main';
     main.innerHTML =
@@ -102,7 +111,7 @@ function renderGrid() {
       `<div class="member-card-handle">@${esc(m.handle)}</div>` +
       `<div class="member-card-persona">${esc(m.persona || '还没有人设')}</div>` +
       `<div class="member-card-foot">` +
-      `<span>${esc(m.driverType)}</span>` +
+      `<span>${esc(driverText)}</span>` +
       `<span>${m.chats.length} 个会话</span>` +
       `<span>记忆 ${m.memory?.chars ? `${m.memory.chars} 字` : '空'}</span>` +
       `</div>`;
@@ -116,7 +125,7 @@ function renderGrid() {
     const wire = document.createElement('button');
     wire.type = 'button';
     wire.className = 'text-btn member-card-wire';
-    wire.textContent = label.cls === 'ok' ? '接入信息' : '接入引导';
+    wire.textContent = m.driverType === 'llm' || label.cls === 'ok' ? '接入信息' : '接入引导';
     wire.addEventListener('click', () => openConnect(m.handle));
 
     card.append(hit, wire);
@@ -135,10 +144,23 @@ async function probeMember() {
   const handle = state.editing;
   if (!handle) return;
   const btn = $('#btn-probe');
+  const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = '测试中…';
   try {
     const r = await api.probeMember(handle);
+
+    // llm 型是真的打了一次模型接口，结果直接说人话
+    if (r.driverType === 'llm') {
+      alert(
+        `成员 ${handle}（大模型直连）\n\n` +
+          (r.ok
+            ? `结果：通了\n模型：${r.model}\n耗时：${(r.latencyMs / 1000).toFixed(1)} 秒\n它说：${r.reply}`
+            : `结果：没通\n耗时：${(r.latencyMs / 1000).toFixed(1)} 秒\n原因：${r.hint}`),
+      );
+      return;
+    }
+
     const seen = r.lastSeenAt ? new Date(r.lastSeenAt).toLocaleTimeString() : '从未';
     const stateText = { hot: '长轮询挂起中', warm: '低频轮询', cold: '离线', wake: '唤醒中' }[r.state] || r.state;
     alert(
@@ -154,7 +176,7 @@ async function probeMember() {
     toast(ex instanceof ApiError ? ex.message : '测试失败');
   } finally {
     btn.disabled = false;
-    btn.textContent = '测试连接';
+    btn.textContent = label;
   }
 }
 
@@ -167,7 +189,15 @@ async function probeMember() {
  */
 async function openConnect(handle, key) {
   const member = state.members.find((m) => m.handle === handle);
-  connect = { handle, key: key || '', name: member?.display || handle, timer: null, shown: false };
+  const driverType = member?.driverType || member?.driver?.type || 'pull';
+  connect = {
+    handle,
+    key: key || '',
+    name: member?.display || handle,
+    driverType,
+    timer: null,
+    shown: false,
+  };
 
   $('#connect-name').textContent = connect.name;
   $('#member-connect').hidden = false;
@@ -185,12 +215,28 @@ async function openConnect(handle, key) {
   }
 
   renderConnect();
-  pollConnect();
+  // 大模型成员不需要等任何人连上来，省掉那套 2.5 秒轮询
+  if (driverType !== 'llm') pollConnect();
+}
+
+/** 接入页对「桥内直连」的成员换一套说法：它已经能说话了，不需要任何外部进程。 */
+function renderConnectForLlm() {
+  $('#connect-manual').hidden = true;
+  $('#connect-ready').hidden = false;
+  $('#connect-lead').hidden = true;
+  setConnectState('online', '已就绪 · 回群里 @ 它试试');
+}
+
+/** 去主界面，把一句现成的开场白填进输入框——让「测一下」变成一次回车。 */
+function tryMember() {
+  const name = connect.name;
+  closeConnect();
+  onCompose({ display: name });
 }
 
 function closeConnect() {
   if (connect.timer) clearTimeout(connect.timer);
-  connect = { handle: '', key: '', name: '', timer: null, shown: false };
+  connect = { handle: '', key: '', name: '', driverType: '', timer: null, shown: false };
   $('#member-connect').hidden = true;
   // 从「新建」流程进来的，关掉接入页才算真正结束，此时回到列表
   if (!$('#member-editor').hidden) closeEditor();
@@ -202,6 +248,17 @@ function renderConnect() {
   const base = publicBase();
   const key = connect.key || 'YOUR_KEY';
   const cfg = { url: base, members: [{ handle: connect.handle, key }] };
+
+  if (connect.driverType === 'llm') {
+    renderConnectForLlm();
+    // 成员密钥是「外部进程来认领身份」用的，桥内直连的成员根本用不上，藏掉免得误导
+    $('.connect-key').hidden = true;
+    return;
+  }
+  $('#connect-manual').hidden = false;
+  $('#connect-ready').hidden = true;
+  $('#connect-lead').hidden = false;
+  $('.connect-key').hidden = false;
 
   $('#connect-config').textContent = JSON.stringify(cfg, null, 2);
   $('#connect-cmd').textContent = 'node sidecar/sidecar.js';
@@ -335,13 +392,24 @@ async function openEditor(handle) {
   form.elements.persona.value = detail?.persona || '';
   form.elements.digest.value = detail?.digest || '';
 
-  const driver = detail?.driver || { type: 'pull' };
+  const driver = detail?.driver || { type: 'llm' };
   const radio = $$('input[name="driverType"]').find((r) => r.value === driver.type);
   if (radio) radio.checked = true;
   form.elements.cmd.value = driver.cmd || '';
   form.elements.args.value = Array.isArray(driver.args) ? driver.args.join(' ') : '';
   form.elements.cwd.value = driver.cwd || '';
   form.elements.url.value = driver.url || '';
+
+  await ensureProviders();
+  fillProviderOptions(driver.provider);
+  form.elements.model.value = driver.model || '';
+  form.elements.baseUrl.value = driver.baseUrl || '';
+  form.elements.temperature.value = driver.temperature ?? '';
+  form.elements.maxTokens.value = driver.maxTokens ?? '';
+  // 密钥从不回传明文：编辑时留空即可保持不变
+  form.elements.apiKey.value = '';
+  form.elements.apiKey.placeholder = driver.hasKey ? '已保存，留空表示不修改' : 'sk-…';
+  $('#llm-key-hint').hidden = !driver.hasKey;
 
   state.drafts.avatar = detail?.avatar || 'preset:01';
   state.drafts.avatarSalt = detail?.avatarSalt || 0;
@@ -429,6 +497,46 @@ function syncDriverFields() {
   const type = $$('input[name="driverType"]').find((r) => r.checked)?.value || 'pull';
   $('#cli-fields').hidden = type !== 'cli';
   $('#webhook-fields').hidden = type !== 'webhook';
+  $('#llm-fields').hidden = type !== 'llm';
+  // llm 型点一下是真的打一次模型接口，比「通道检查」有用得多，所以按钮文案跟着换
+  const probe = $('#btn-probe');
+  if (probe) probe.textContent = type === 'llm' ? '测一下模型' : '测试连接';
+}
+
+// ── 大模型直连 ───────────────────────────────────────────────────────
+
+/** 服务商列表只取一次：它基本不变，没必要每次开编辑器都请求。 */
+async function ensureProviders() {
+  if (state.providers) return state.providers;
+  try {
+    const r = await api.llmProviders();
+    state.providers = r.providers || {};
+  } catch {
+    state.providers = { custom: { label: '自定义 / 自建网关', baseUrl: '', model: '' } };
+  }
+  return state.providers;
+}
+
+function fillProviderOptions(selected) {
+  const sel = $('#llm-provider');
+  if (!sel) return;
+  const list = state.providers || {};
+  sel.innerHTML = Object.entries(list)
+    .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`)
+    .join('');
+  sel.value = list[selected] ? selected : 'custom';
+}
+
+/** 换服务商把地址与模型名一起带过去——用户不该为了填地址去翻文档。 */
+function onProviderChange() {
+  const p = (state.providers || {})[$('#llm-provider')?.value];
+  if (!p) return;
+  const form = $('#editor-form');
+  if (p.baseUrl) form.elements.baseUrl.value = p.baseUrl;
+  if (p.model) {
+    form.elements.model.value = p.model;
+    form.elements.model.placeholder = p.model;
+  }
 }
 
 async function save(e) {
@@ -457,6 +565,19 @@ async function save(e) {
   if (type === 'webhook') {
     if (!/^https?:\/\//.test(form.elements.url.value.trim())) return fail('回调地址需以 http(s):// 开头');
     driver.url = form.elements.url.value.trim();
+  }
+  if (type === 'llm') {
+    driver.provider = form.elements.provider.value || 'custom';
+    driver.baseUrl = form.elements.baseUrl.value.trim();
+    driver.model = form.elements.model.value.trim();
+    // 留空 = 不修改（编辑时不该被逼着重敲一遍密钥）
+    driver.apiKey = form.elements.apiKey.value.trim();
+    const t = Number(form.elements.temperature.value);
+    if (form.elements.temperature.value !== '' && Number.isFinite(t)) driver.temperature = t;
+    const mt = Number(form.elements.maxTokens.value);
+    if (form.elements.maxTokens.value !== '' && Number.isFinite(mt)) driver.maxTokens = mt;
+    if (!/^https?:\/\//.test(driver.baseUrl)) return fail('请填写模型接口地址（http/https 开头）');
+    if (!driver.model) return fail('请填写模型名，例如 deepseek-chat');
   }
 
   const chats = $$('#chat-checks input:checked').map((cb) => cb.value);

@@ -76,6 +76,7 @@ export const api = {
   saveMemory: (handle, digest) =>
     request(`/api/members/${handle}/memory`, { method: 'PUT', body: { digest } }),
   avatars: () => request('/api/avatars'),
+  llmProviders: () => request('/api/llm-providers'),
 
   /** SSE 只用来「叫醒」，真实数据仍然靠上面的增量接口。 */
   events(chatId, onEvent, onError) {
