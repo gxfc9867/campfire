@@ -1,7 +1,32 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { startAcpGateway } from './launcher.js';
 import { AcpClient } from './acp-client.js';
 import { WorkBuddyBridge, SessionIndex } from './bridge.js';
+
+// 读项目根 .env（与主服务一致；已存在的环境变量不覆盖，方便命令行临时覆盖）
+const __root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+{
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(__root, '.env'), 'utf8');
+  } catch {
+    raw = '';
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
+    const eq = s.indexOf('=');
+    if (eq < 1) continue;
+    const key = s.slice(0, eq).trim();
+    let val = s.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
 
 /**
  * 桥进程：把围炉里的消息投进 WorkBuddy 会话，再把回复发回围炉。
@@ -108,7 +133,7 @@ export async function runBridge(cfg, { fetchImpl = fetch, log = null, signal = n
     log,
   });
 
-  const acp = new AcpClient({ baseUrl: gateway.baseUrl, password: cfg.password });
+  const acp = new AcpClient({ baseUrl: gateway.baseUrl, password: cfg.password, log });
   await acp.connect();
   await acp.initialize({ name: 'campfire-bridge', version: '1' });
 

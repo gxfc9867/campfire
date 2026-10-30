@@ -56,6 +56,13 @@ export class WorkBuddyBridge {
     return this.enqueue(sessionId, async () => {
       if (!this.loaded.has(sessionId)) {
         await this.acp.loadSession({ sessionId, cwd });
+        // 绕过工具批准：bypassPermissions 让工具在会话侧自动执行。
+        // 桥不执行工具、也不响应批准请求，否则模型会卡在等批准直到超时。
+        try {
+          await this.acp.setMode({ sessionId, modeId: 'bypassPermissions' });
+        } catch (e) {
+          this.log?.warn?.(`[workbuddy] 设置权限模式失败：${e.message}`);
+        }
         this.loaded.add(sessionId);
         this.log?.info?.(`[workbuddy] session loaded ${sessionId}`);
       }
