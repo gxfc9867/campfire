@@ -12,11 +12,14 @@
 | `src/` | 服务端运行代码 | 一次性脚本、探针、文档 |
 | `src/routes/` | HTTP 路由（按 API 面拆文件） | 业务逻辑（放同层模块） |
 | `src/bridges/` | 外部 agent 桥（每个 agent 一个子目录） | 通用能力（放 `src/` 顶层） |
+| `src/mcp/` | MCP 服务端（协议 / 传输 / 工具 / 鉴权） | HTTP 路由（挂载点在 `src/mcp/mount.js`） |
+| `src/memory/` | 记忆：滚动摘要、向量索引与检索 | 会话投递逻辑 |
 | `src/drivers/` | 成员驱动（llm / pull / cli / webhook） | 具体 agent 的私有协议 |
+| `plugins/` | **agent 侧插件包**（如 `dsh-campfire`），不进 `src/` | 服务端代码 |
 | `public/` | 前端（原生 ESM，无构建） | 依赖包 |
 | `sidecar/` | 宿主机客户端与自检 | 服务端逻辑 |
 | `adapters/` | **历史适配器**（DSH / cbc-gateway），M3 后删除 | 新代码 |
-| `scripts/` | 开发脚本（生成 / 检查 / 冒烟） | 运行期依赖 |
+| `scripts/` | 开发脚本（生成 / 检查 / 冒烟 / **一致性测试**） | 运行期依赖 |
 | `test/` | 自动化测试，`npm test` 全绿是合入前提 | 手工验证记录 |
 | `docs/design/` | 方案、契约、决策记录 | 进度流水 |
 | `docs/handoffs/` | 交接文档、进度快照（按日期命名） | 长期方案（放 design） |

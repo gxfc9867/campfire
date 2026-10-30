@@ -1,6 +1,8 @@
-# 围炉通用接入草案 v1.2（Channel API + MCP）
+# 围炉通用接入草案 v1.3（Channel API + MCP）
 
-> 状态：**开工条件已满足**。WorkBuddy 侧最终方案 = **内存 token 注入 + HTTP-ACP**（已双人复验）。
+> 状态：**M1 / M2 / M3 / M4 / M5 已落地**，178 项测试全绿；剩 M6 收尾与真机验收。
+> v1.3 变更：§4.8 错误形状改回扁平（与实现一致，并说明理由）；§8 一致性测试已落地
+> （`scripts/conformance.mjs` 24 条，真围炉与 strict mock 均 24/24）；MCP 记忆工具接通 M5。
 > v1.2 变更：新增 §7.4（桥是围炉内部模块）、§8.5（合规与免责）、DB 迁移要求。
 > v1.1 变更：Q21 改为 token 注入；新增 Q24–Q26。
 > v0.8 变更：新增 §12 逆向评估；Q9 修正；Q20 完成真实会话读写验证。
@@ -167,7 +169,19 @@ GET  /v1/media/{id}
 
 `unauthorized / forbidden / not_found / conflict / rate_limited / payload_too_large / unsupported_type / cursor_expired / binding_invalid / upstream_error`
 
-统一形状 `{ error: { code, message, details, traceId } }`。
+**定稿形状（v1.3 修正）**：
+
+```json
+{ "error": "游标已过期，请从 0 重新拉取", "code": "cursor_expired" }
+```
+
+- `code` 是机器可读的稳定枚举，客户端按它分支；
+- `error` 是给人看的中文描述，可直接展示；
+- **为什么不是嵌套**：围炉现有全部端点（含前端 `public/js/api.js`）都用扁平形状，改成
+  `{error:{code,message}}` 要动 20 多处实现和全部老测试，收益只是「看起来更规范」。
+  机器码在顶层一样能分支，不需要多一层。
+- 客户端**兼容两种**读法（围炉的 DSH 插件已这么做）：优先结构化 `error.code`，退回顶层 `code`。
+  这样将来真要换形状，不会把 `cursor_expired` 这类关键码读丢（丢了就没法自动重拉）。
 
 ### 4.9 兼容层（旧接口的去向）
 
@@ -331,9 +345,22 @@ GET  /v1/media/{id}
 ## 8. 版本与一致性
 
 - URL 版本 `/v1`；字段只增不删，弃用标 `deprecated` 并保留两个 minor；
-- 独立仓库 `campfire-conformance`：黑盒用例（鉴权/幂等/游标/附件/wakeup/丢弃/错误码），输出 JSON 报告；
-- 单文件 TS 参考客户端，目标「30 分钟接完」。
-- **数据库迁移**：现有 `store.js` 只有 `CREATE TABLE IF NOT EXISTS`，无版本机制。v1 新增 `channels / bindings / deliveries` 表前，先加 `PRAGMA user_version` + 顺序迁移脚本，避免老库升级失败。
+- **一致性测试（已落地，v1.3）**：`scripts/conformance.mjs`，24 条黑盒用例，覆盖
+  meta / auth / stream / send / scope / long-poll / ack / quota。零依赖，对任意实现可跑：
+
+  ```bash
+  node scripts/conformance.mjs --base http://host:8099 --owner <主人口令> --member <handle>
+  node scripts/conformance.mjs --base http://host:8099 --token <渠道令牌> --chat main
+  ```
+
+  给 `--owner` 时自建临时渠道、跑完删测试消息并吊销；输出 JSON 报告，退出码 0/1/2。
+  **已通过**：真围炉 24/24、mock 围炉（`--strict`）24/24。
+- **mock 的定位**：`plugins/dsh-campfire/mock-campfire.cjs` 默认是宽松测试替身（方便单测），
+  加 `--strict` 后按本契约回包，可当「最小参考实现」看。
+- **参考客户端**：`plugins/dsh-campfire/src/campfire-client.js`（174 行，零依赖），
+  接第三家时可以直接抄。
+- **数据库迁移（已落地）**：`src/migrations.js` 用 `PRAGMA user_version` + 顺序迁移，
+  v1 的 `channels / channel_cursors` 表和 M5 的 `chat_summaries / message_embeddings` 都走它。
 
 ---
 
