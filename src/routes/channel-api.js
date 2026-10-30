@@ -93,6 +93,7 @@ export function registerChannelRoutes(router, ctx) {
       const chatId = url.searchParams.get('chat') || (members.get(member)?.chats || [])[0];
       if (!chatId) throw badRequest('缺少 chat 参数');
       assertMemberInChat(member, chatId);
+      const chat = store.getChat(chatId);
 
       const rawCursor = url.searchParams.get('cursor');
       let cursor = rawCursor === null ? store.getChannelCursor(channel.id, chatId) : Number(rawCursor);
@@ -106,19 +107,32 @@ export function registerChannelRoutes(router, ctx) {
       let hasMore = false;
       const deadline = Date.now() + waitSec * 1000;
 
-      for (;;) {
-        const page = store.listMessages({ chatId, after: cursor, limit });
-        items = page.items;
-        hasMore = page.hasMore;
-        if (items.length > 0 || waitSec === 0 || Date.now() >= deadline || res.writableEnded) break;
-        await new Promise((r) => setTimeout(r, 300));
-        if (res.writableEnded) break;
+      // 客户端提前断开时别把等待挂到超时
+      const closed = new AbortController();
+      const onClose = () => closed.abort();
+      req.on('close', onClose);
+
+      try {
+        for (;;) {
+          const page = store.listMessages({ chatId, after: cursor, limit });
+          items = page.items;
+          hasMore = page.hasMore;
+          if (items.length > 0 || waitSec === 0 || res.writableEnded) break;
+          const remaining = deadline - Date.now();
+          if (remaining <= 0 || closed.signal.aborted) break;
+          // 事件驱动：同会话有新消息时 hub 立刻叫醒，不必等满 wait
+          const outcome = await hub.wait(chatId, remaining, closed.signal);
+          if (outcome === 'aborted' || res.writableEnded) break;
+        }
+      } finally {
+        req.off('close', onClose);
       }
 
       const updates = items.map((msg) => ({
         updateId: `${chatId}:${msg.seq}`,
         type: msg.meta?.deleted ? 'message.deleted' : msg.meta?.edited ? 'message.edited' : 'message.created',
         chatId,
+        chatTitle: chat?.name || chatId,
         seq: msg.seq,
         message: serialize(msg, member),
         wakeup: mentionsOf(msg.text, member).length > 0 ? 'reply' : 'notify',

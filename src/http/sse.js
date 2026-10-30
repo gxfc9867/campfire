@@ -8,6 +8,7 @@
 export class EventHub {
   constructor() {
     this.clients = new Set();
+    this.waiters = new Set();
     this.timer = setInterval(() => this.ping(), 25_000);
     this.timer.unref?.();
   }
@@ -44,6 +45,45 @@ export class EventHub {
         this.clients.delete(c);
       }
     }
+    // 唤醒等待中的长轮询：有新消息时立刻返回，不必等满 wait
+    for (const w of [...this.waiters]) {
+      if (chatId && w.chatId && w.chatId !== chatId) continue;
+      w.finish('change');
+    }
+  }
+
+  /**
+   * 等下一次变化：匹配到 chatId 的变化、超时、或 signal 中止时 resolve，永不 reject。
+   *
+   * 只用来「叫醒」长轮询，不承载数据——醒来后调用方自己再查一次增量，
+   * 所以漏掉唤醒最多多等一次超时，不会丢消息。
+   *
+   * @param {string} chatId 只等该会话的变化；空串表示任意变化
+   * @param {number} timeoutMs 0 表示不设超时
+   * @param {AbortSignal} [signal] 客户端断开时用来提前收尾
+   * @returns {Promise<'change'|'timeout'|'aborted'>}
+   */
+  wait(chatId = '', timeoutMs = 0, signal) {
+    if (signal?.aborted) return Promise.resolve('aborted');
+    return new Promise((resolve) => {
+      const waiter = { chatId, finish: null, timer: null, detach: null };
+      const finish = (reason) => {
+        if (!waiter.finish) return;
+        waiter.finish = null;
+        if (waiter.timer) clearTimeout(waiter.timer);
+        waiter.detach?.();
+        this.waiters.delete(waiter);
+        resolve(reason);
+      };
+      waiter.finish = finish;
+      if (timeoutMs > 0) waiter.timer = setTimeout(() => finish('timeout'), timeoutMs);
+      if (signal) {
+        const onAbort = () => finish('aborted');
+        signal.addEventListener('abort', onAbort, { once: true });
+        waiter.detach = () => signal.removeEventListener('abort', onAbort);
+      }
+      this.waiters.add(waiter);
+    });
   }
 
   /** 注释行心跳：反代通常只根据「有没有字节流动」判断连接是否还活着。 */
@@ -70,6 +110,7 @@ export class EventHub {
       }
     }
     this.clients.clear();
+    for (const w of [...this.waiters]) w.finish('aborted');
     clearInterval(this.timer);
   }
 }

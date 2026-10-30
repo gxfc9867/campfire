@@ -107,6 +107,27 @@ describe('Channel API v1', () => {
     assert.equal(res.status, 403);
   });
 
+  test('长轮询：有新消息立刻唤醒返回，不等满 wait', async () => {
+    const head = await api('/v1/updates?chat=main&cursor=0&limit=200');
+    const cursor = (await head.json()).nextCursor;
+
+    const started = Date.now();
+    const pending = api(`/v1/updates?chat=main&cursor=${cursor}&wait=8`);
+    const timer = setTimeout(() => {
+      owner.post('/api/messages', { chat: 'main', text: '唤醒测试' }).catch(() => {});
+    }, 300);
+
+    const res = await pending;
+    clearTimeout(timer);
+    const elapsed = Date.now() - started;
+    const body = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(body.updates.length, 1, '应拿到刚发的那条');
+    assert.ok(body.updates[0].chatTitle, 'update 应带 chatTitle');
+    assert.ok(elapsed < 4000, `应被事件立刻唤醒，实际耗时 ${elapsed}ms`);
+  });
+
   test('主人可列出与吊销渠道，吊销后令牌失效', async () => {
     const list = await owner.get('/api/admin/channels?member=ruyi');
     assert.equal(list.status, 200);

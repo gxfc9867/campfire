@@ -26,3 +26,6 @@ adapters/dsh/data/
 
 # 本地冒烟脚本
 .smoke3/
+
+# 一致性测试报告（跑 conformance 时生成）
+conformance-report.json
