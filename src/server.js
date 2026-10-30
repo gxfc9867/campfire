@@ -20,6 +20,7 @@ import { registerAdminRoutes } from './routes/admin.js';
 import { registerMessageRoutes, startJobSweeper } from './routes/messages.js';
 import { registerMemberRoutes } from './routes/member-api.js';
 import { registerChannelRoutes } from './routes/channel-api.js';
+import { registerMcpRoutes } from './mcp/mount.js';
 
 const log = logger.child('server');
 
@@ -65,6 +66,7 @@ export function createApp(overrides = {}) {
   registerMessageRoutes(router, ctx);
   registerMemberRoutes(router, ctx);
   registerChannelRoutes(router, ctx);
+  registerMcpRoutes(router, ctx);
 
   /** 首页需要注入 basePath，否则子路径部署时前端拼不出正确的 API 地址。 */
   function serveIndex(req, res) {
