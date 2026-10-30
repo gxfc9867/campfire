@@ -10,12 +10,26 @@
 | `acp-client.js` | HTTP-ACP 客户端：connect / initialize / session/load / session/prompt，SSE 解析与错误码归一 |
 | `bridge.js` | 投递编排：同会话串行、load 一次、messageId 去重、失败清缓存；`SessionIndex` 负责同步 `workbuddy.db` |
 | `launcher.js` | 起子进程：清理 App 注入的环境变量、注入 token、从 stdout 解析端口 |
+| `run.js` | 独立桥进程：拉 `/v1/updates` → 投递 → 回发 → ack；`npm run workbuddy` |
+
+## 怎么跑
+
+```bash
+# 1) 围炉侧：给成员建渠道，拿 token
+curl -b cookie.txt -X POST http://127.0.0.1:8099/api/admin/channels \
+  -H 'Content-Type: application/json' -d '{"member":"ruyi","name":"如意群聊"}'
+
+# 2) 本机侧：把 token 写进受限目录
+#    ~/.campfire/secrets/workbuddy-bearer.txt
+
+# 3) 配环境变量（见 .env.example 的 WorkBuddy 段），然后
+npm run workbuddy
+```
 
 ## 待接（M3 收尾）
 
 1. 围炉配置项：`tokenFile` / `cliBin` / `configDir` / `dbPath`；
-2. 在成员投递链路里调用 `bridge.deliver()`，并把回复写回围炉；
-3. 启动时 capability probe：ACP 不可用则降级 automation。
+2. 启动时 capability probe：ACP 不可用则降级 automation。
 
 ## 职责
 
