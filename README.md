@@ -162,27 +162,35 @@ docker run -d --name campfire \
 ## 目录
 
 ```
-src/           服务端
-  server.js      路由装配与生命周期
-  config.js      配置解析
-  store.js       SQLite（唯一接触数据库的地方）
-  members.js     成员配置（文件 + 乐观锁 + 脱敏）
-  memory.js      记忆摘要
-  presence.js    可达 / 就绪
-  wake.js        唤醒决策（只判断，不执行）
-  outbox.js      长轮询挂起表
-  routes/        admin / messages / member-api
-public/        前端（原生 ES 模块，无构建）
-sidecar/       宿主机客户端 + 自检
-scripts/       头像生成 / 静态检查 / 端到端冒烟
-test/          35 项测试
-docs/          架构 / 接口 / 运维
+src/             服务端
+  server.js        路由装配与生命周期
+  config.js        配置解析
+  store.js         SQLite（唯一接触数据库的地方）
+  members.js       成员配置（文件 + 乐观锁 + 脱敏）
+  memory.js        记忆摘要
+  presence.js      可达 / 就绪
+  wake.js          唤醒决策（只判断，不执行）
+  outbox.js        长轮询挂起表
+  routes/          admin / messages / member-api / channel-api（v1）
+  bridges/         外部 agent 桥（按 agent 分子目录）
+public/          前端（原生 ES 模块，无构建）
+sidecar/         宿主机客户端 + 自检
+adapters/        旧适配器（DSH / cbc-gateway，M3 后移除）
+scripts/         头像生成 / 静态检查 / 端到端冒烟
+test/            自动化测试
+docs/
+  design/        方案与决策（CONNECTION-DRAFT）
+  handoffs/      交接与进度记录
+  probes/        逆向探针（非生产代码，不含凭据）
+Dockerfile / docker-compose.yml   部署（保持仓库根，符合惯例）
 ```
+
+协作与命名规则见 `docs/LAYOUT.md`。
 
 ## 开发
 
 ```bash
-npm test     # 35 项
+npm test     # 84 项
 npm run smoke  # 桥 + sidecar + 假 CLI 的完整链路
 npm run check  # 语法、资源引用、敏感信息
 ```
