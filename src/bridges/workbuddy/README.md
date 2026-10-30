@@ -1,7 +1,21 @@
-# WorkBuddy 桥（占位，M3 实现）
+# WorkBuddy 桥
 
-> 状态：**未实现**。本文件只定义边界，避免后来者重复踩坑。
+> 状态：**核心已实现并有测试覆盖（98 项全绿），尚未接入围炉路由与配置**。
 > 方案依据：`docs/design/CONNECTION-DRAFT.md` §7 / §11.4 / §12；现场证据：`docs/handoffs/HANDOFF-WORKBUDDY-BRIDGE-2026-10-30.md`。
+
+## 文件
+
+| 文件 | 职责 |
+|---|---|
+| `acp-client.js` | HTTP-ACP 客户端：connect / initialize / session/load / session/prompt，SSE 解析与错误码归一 |
+| `bridge.js` | 投递编排：同会话串行、load 一次、messageId 去重、失败清缓存；`SessionIndex` 负责同步 `workbuddy.db` |
+| `launcher.js` | 起子进程：清理 App 注入的环境变量、注入 token、从 stdout 解析端口 |
+
+## 待接（M3 收尾）
+
+1. 围炉配置项：`tokenFile` / `cliBin` / `configDir` / `dbPath`；
+2. 在成员投递链路里调用 `bridge.deliver()`，并把回复写回围炉；
+3. 启动时 capability probe：ACP 不可用则降级 automation。
 
 ## 职责
 
