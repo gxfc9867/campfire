@@ -546,6 +546,74 @@ export class Store {
       )
       .run(channelId, chatId, Number(cursor) || 0, Date.now());
   }
+
+  // ── 记忆：摘要与向量 ────────────────────────────────────────────────
+
+  getChatSummary(chatId) {
+    const row = this.db.prepare('SELECT * FROM chat_summaries WHERE chat_id = ?').get(chatId);
+    if (!row) return null;
+    return {
+      chatId: row.chat_id,
+      summary: row.summary,
+      coversUpToSeq: Number(row.covers_up_to_seq),
+      model: row.model || null,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  upsertChatSummary({ chatId, summary, coversUpToSeq, model = null }) {
+    this.db
+      .prepare(
+        `INSERT INTO chat_summaries (chat_id, summary, covers_up_to_seq, model, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET
+           summary = excluded.summary,
+           covers_up_to_seq = excluded.covers_up_to_seq,
+           model = excluded.model,
+           updated_at = excluded.updated_at`,
+      )
+      .run(chatId, summary, Number(coversUpToSeq) || 0, model, Date.now());
+    return this.getChatSummary(chatId);
+  }
+
+  upsertEmbedding({ messageId, chatId, seq, vector, model = null }) {
+    if (!Array.isArray(vector) || vector.length === 0) throw new Error('vector 不能为空');
+    this.db
+      .prepare(
+        `INSERT INTO message_embeddings (message_id, chat_id, seq, vector, dim, model, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET
+           vector = excluded.vector, dim = excluded.dim, model = excluded.model, updated_at = excluded.updated_at`,
+      )
+      .run(messageId, chatId, Number(seq) || 0, JSON.stringify(vector), vector.length, model, Date.now());
+  }
+
+  listEmbeddings(chatId, { limit = 5000 } = {}) {
+    const rows = this.db
+      .prepare('SELECT * FROM message_embeddings WHERE chat_id = ? ORDER BY seq DESC LIMIT ?')
+      .all(chatId, Math.min(Math.max(limit, 1), 20000));
+    return rows.map((r) => ({
+      messageId: r.message_id,
+      chatId: r.chat_id,
+      seq: Number(r.seq),
+      vector: safeJson(r.vector) || [],
+      dim: Number(r.dim),
+      model: r.model || null,
+    }));
+  }
+
+  /** 还没做向量的消息（按 seq 升序）。 */
+  messagesNeedingEmbedding(chatId, { limit = 100 } = {}) {
+    const rows = this.db
+      .prepare(
+        `SELECT m.* FROM messages m
+         LEFT JOIN message_embeddings e ON e.message_id = m.id
+         WHERE m.chat_id = ? AND e.message_id IS NULL
+         ORDER BY m.seq ASC LIMIT ?`,
+      )
+      .all(chatId, Math.min(Math.max(limit, 1), 1000));
+    return rows.map(mapMessage);
+  }
 }
 
 function mapChannel(r) {

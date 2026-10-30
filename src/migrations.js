@@ -50,6 +50,31 @@ export const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 4,
+    name: 'memory',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_summaries (
+          chat_id          TEXT PRIMARY KEY,
+          summary          TEXT NOT NULL,
+          covers_up_to_seq INTEGER NOT NULL,
+          model            TEXT,
+          updated_at       INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS message_embeddings (
+          message_id TEXT PRIMARY KEY,
+          chat_id    TEXT NOT NULL,
+          seq        INTEGER NOT NULL,
+          vector     TEXT NOT NULL,
+          dim        INTEGER NOT NULL,
+          model      TEXT,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_embeddings_chat ON message_embeddings(chat_id, seq);
+      `);
+    },
+  },
 ];
 
 export function currentVersion(db) {
