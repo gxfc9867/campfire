@@ -11,9 +11,10 @@ import { parseCookies } from './util.js';
  * 刻意不做多用户与角色系统：这是单人自托管工具，多角色只会增加攻击面。
  */
 export class Auth {
-  constructor({ config, members }) {
+  constructor({ config, members, channels }) {
     this.config = config;
     this.members = members;
+    this.channels = channels || null;
     this.cookieName = 'cf_session';
     this.sessions = new Map(); // token -> expiresAt
 
@@ -70,6 +71,17 @@ export class Auth {
    * 成员判定必须在主人判定之前：成员密钥只代表它自己，永远不能升级成主人。
    */
   identify(req) {
+    // v1 渠道：Authorization: Bearer cf_xxx。渠道 token 只代表它绑定的那一个成员。
+    const authz = String(req.headers.authorization || '');
+    if (/^bearer\s+/i.test(authz)) {
+      const token = authz.replace(/^bearer\s+/i, '').trim();
+      const channel = this.channels?.verify(token) || null;
+      if (channel) {
+        return { kind: 'channel', channel, member: channel.member, scopes: channel.scopes };
+      }
+      return { kind: 'anon', reason: 'bad_channel_token' };
+    }
+
     const handle = String(req.headers['x-campfire-member'] || '').trim();
     const key = String(req.headers['x-campfire-key'] || '').trim();
     if (handle && key) {

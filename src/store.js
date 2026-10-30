@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { MAIN_CHAT, JOB_STATUS } from './constants.js';
 import { shortId } from './id.js';
+import { migrate } from './migrations.js';
 
 /**
  * 持久层。整个项目只有这里直接接触 SQLite。
@@ -96,6 +97,9 @@ export class Store {
     if (!cols.includes('peer')) {
       this.db.exec('ALTER TABLE chats ADD COLUMN peer TEXT');
     }
+
+    // 版本化迁移：v1 之后的新表都走这里，保证老库升级不炸
+    this.migration = migrate(this.db);
   }
 
   close() {
@@ -481,6 +485,80 @@ export class Store {
       .prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(key, String(value));
   }
+
+  // ── 渠道（v1 接入方）────────────────────────────────────────────────
+
+  createChannel({ id, member, name, tokenHash, scopes }) {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO channels (id, member, name, token_hash, scopes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, member, name, tokenHash, JSON.stringify(scopes || []), now);
+    return this.getChannel(id);
+  }
+
+  getChannel(id) {
+    const row = this.db.prepare('SELECT * FROM channels WHERE id = ?').get(id);
+    return row ? mapChannel(row) : null;
+  }
+
+  /** 按 token 哈希查渠道；吊销的不返回。 */
+  findChannelByTokenHash(tokenHash) {
+    const row = this.db
+      .prepare('SELECT * FROM channels WHERE token_hash = ? AND revoked_at IS NULL')
+      .get(tokenHash);
+    return row ? mapChannel(row) : null;
+  }
+
+  touchChannel(id, now = Date.now()) {
+    this.db.prepare('UPDATE channels SET last_used_at = ? WHERE id = ?').run(now, id);
+  }
+
+  listChannels(member) {
+    const rows = member
+      ? this.db.prepare('SELECT * FROM channels WHERE member = ? ORDER BY created_at DESC').all(member)
+      : this.db.prepare('SELECT * FROM channels ORDER BY created_at DESC').all();
+    return rows.map(mapChannel);
+  }
+
+  revokeChannel(id) {
+    this.db.prepare('UPDATE channels SET revoked_at = ? WHERE id = ?').run(Date.now(), id);
+    return this.getChannel(id);
+  }
+
+  // ── 渠道游标 ────────────────────────────────────────────────────────
+
+  getChannelCursor(channelId, chatId) {
+    const row = this.db
+      .prepare('SELECT cursor FROM channel_cursors WHERE channel_id = ? AND chat_id = ?')
+      .get(channelId, chatId);
+    return row ? Number(row.cursor) : 0;
+  }
+
+  setChannelCursor(channelId, chatId, cursor) {
+    this.db
+      .prepare(
+        `INSERT INTO channel_cursors (channel_id, chat_id, cursor, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(channel_id, chat_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
+      )
+      .run(channelId, chatId, Number(cursor) || 0, Date.now());
+  }
+}
+
+function mapChannel(r) {
+  return {
+    id: r.id,
+    member: r.member,
+    name: r.name,
+    tokenHash: r.token_hash,
+    scopes: safeJson(r.scopes) || [],
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at || null,
+    revokedAt: r.revoked_at || null,
+  };
 }
 
 function mapChat(r) {

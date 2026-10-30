@@ -11,6 +11,7 @@ import { InboxWaiters } from './outbox.js';
 import { EventHub } from './http/sse.js';
 import { Auth } from './http/auth.js';
 import { Router } from './http/router.js';
+import { Channels } from './channels.js';
 import { WakePlanner } from './wake.js';
 import { serverError, notFound, unauthorized } from './errors.js';
 import { sendError, sendText } from './http/util.js';
@@ -18,6 +19,7 @@ import { serveStatic } from './http/static.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerMessageRoutes, startJobSweeper } from './routes/messages.js';
 import { registerMemberRoutes } from './routes/member-api.js';
+import { registerChannelRoutes } from './routes/channel-api.js';
 
 const log = logger.child('server');
 
@@ -39,7 +41,8 @@ export function createApp(overrides = {}) {
   const presence = new Presence({ config: cfg });
   const waiters = new InboxWaiters({ max: cfg.maxPolls });
   const hub = new EventHub();
-  const auth = new Auth({ config: cfg, members });
+  const channels = new Channels({ store, members });
+  const auth = new Auth({ config: cfg, members, channels });
 
   const ctx = {
     cfg,
@@ -50,6 +53,7 @@ export function createApp(overrides = {}) {
     waiters,
     hub,
     auth,
+    channels,
     log: logger.child('app'),
     version: readVersion(),
   };
@@ -60,6 +64,7 @@ export function createApp(overrides = {}) {
   registerAdminRoutes(router, ctx);
   registerMessageRoutes(router, ctx);
   registerMemberRoutes(router, ctx);
+  registerChannelRoutes(router, ctx);
 
   /** 首页需要注入 basePath，否则子路径部署时前端拼不出正确的 API 地址。 */
   function serveIndex(req, res) {
@@ -97,7 +102,8 @@ export function createApp(overrides = {}) {
         pathname = pathname.slice(cfg.basePath.length);
       }
 
-      if (!pathname.startsWith('/api/')) {
+      // /v1 是给外部 agent 的标准接入面，与 /api 一样走路由，不落到静态资源
+      if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) {
         if (pathname === '/' || pathname === '/index.html') return serveIndex(req, res);
         if (serveStatic(cfg.paths.publicDir, req, res, pathname)) return;
         return sendText(res, 404, 'not found');
@@ -115,6 +121,9 @@ export function createApp(overrides = {}) {
         if (identity.kind !== 'member') {
           throw unauthorized(identity.reason === 'bad_member_key' ? '成员密钥不正确' : '需要成员凭据');
         }
+      }
+      if (need === 'channel' && identity.kind !== 'channel') {
+        throw unauthorized(identity.reason === 'bad_channel_token' ? '渠道令牌不正确' : '需要渠道令牌');
       }
 
       await hit.route.handler(req, res, url, identity, ...hit.params);
@@ -158,6 +167,9 @@ export function createApp(overrides = {}) {
     const actualPort = typeof addr === 'object' && addr ? addr.port : cfg.port;
 
     announceOwnerKey(log);
+    if (store.migration?.applied?.length) {
+      log.info(`数据库迁移 v${store.migration.from} → v${store.migration.to}`);
+    }
     sweeper = startJobSweeper({ store, hub, log });
     sweepTimer = setInterval(() => presence.sweep(), 60_000);
     sweepTimer.unref?.();
