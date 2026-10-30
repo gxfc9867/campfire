@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Campfire Channel",
+    "description": "Bridges Campfire group chats into DSH sessions: each chat gets its own session, mentions wake it, replies are posted back."
+  }
+}
