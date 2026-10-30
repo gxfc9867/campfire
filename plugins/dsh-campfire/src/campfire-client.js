@@ -27,6 +27,26 @@ function isAbortError(error) {
 }
 
 /**
+ * 解析围炉的错误体。
+ *
+ * 围炉实际返回的是扁平形状 `{ error: "人话", code: "机器码" }`（前端 `public/js/api.js` 也按这个读）；
+ * 草案 §4 曾写 `{ error: { code, message } }`。两种都认，优先取结构化那种，
+ * 免得服务端换形状时客户端把 `cursor_expired` 之类的关键码读丢（丢了就没法自动重拉）。
+ */
+function readErrorEnvelope(data) {
+  if (!data || typeof data !== 'object') return {};
+  const structured = data.error;
+  if (structured && typeof structured === 'object') {
+    return { code: structured.code, message: structured.message, details: structured.details ?? null };
+  }
+  return {
+    code: data.code,
+    message: typeof structured === 'string' ? structured : data.message,
+    details: data.details ?? null,
+  };
+}
+
+/**
  * @param {{
  *   baseUrl: string,
  *   token?: string,
@@ -108,7 +128,7 @@ export function createCampfireClient(options = {}) {
       }
     }
     if (!response.ok) {
-      const envelope = data && typeof data === 'object' ? data.error ?? {} : {};
+      const envelope = readErrorEnvelope(data);
       throw new CampfireError(
         `围炉 ${method} ${path} 返回 ${response.status}：${envelope.code ?? 'http_error'}${
           envelope.message ? ` ${envelope.message}` : ''

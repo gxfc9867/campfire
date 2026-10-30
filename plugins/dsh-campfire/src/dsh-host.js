@@ -233,38 +233,66 @@ export function createDshHost({ ctx, config = {}, log = () => {} }) {
     return fromEvents || latestAssistantText(sessionId, startSeq);
   }
 
+  /**
+   * 同一会话内的投递必须串行。
+   *
+   * `waits` 按 sessionId 单槽，而成员:会话默认是 1:1（`sessionScope = '*'`），
+   * 意味着多个群的 poller 会并发投进同一个会话：后一个 ask 的 waiter 会顶掉前一个，
+   * 前一条消息的回复就此丢失。这里用一条 promise 链把同会话的投递排成队。
+   */
+  const sessionQueues = new Map();
+
+  function withSessionLock(sessionId, task) {
+    const key = String(sessionId);
+    const previous = sessionQueues.get(key) ?? Promise.resolve();
+    const current = previous.then(task, task);
+    const tail = current.then(
+      () => {},
+      () => {},
+    );
+    sessionQueues.set(key, tail);
+    tail.then(() => {
+      if (sessionQueues.get(key) === tail) sessionQueues.delete(key);
+    });
+    return current;
+  }
+
   /** 唤醒一轮（followup）并等它跑完，返回这轮 assistant 文本。 */
   async function ask({ agent, sessionId, text, timeoutMs = 120_000 }) {
-    if (typeof agent?.followup !== 'function') {
-      throw new Error('该 Agent 没有 followup()，无法投递围炉消息');
-    }
-    const startSeq = currentSeq(sessionId);
-    const message = buildUserMessage(text);
-    const waiting = waitForTurn({ agent, sessionId, startSeq, timeoutMs });
-    try {
-      const queued = agent.followup(message);
-      if (queued && typeof queued.then === 'function') await queued;
-    } catch (error) {
-      waits.delete(sessionId);
-      throw error;
-    }
-    return waiting;
+    return withSessionLock(sessionId, async () => {
+      if (typeof agent?.followup !== 'function') {
+        throw new Error('该 Agent 没有 followup()，无法投递围炉消息');
+      }
+      const startSeq = currentSeq(sessionId);
+      const message = buildUserMessage(text);
+      const waiting = waitForTurn({ agent, sessionId, startSeq, timeoutMs });
+      try {
+        const queued = agent.followup(message);
+        if (queued && typeof queued.then === 'function') await queued;
+      } catch (error) {
+        waits.delete(sessionId);
+        throw error;
+      }
+      return waiting;
+    });
   }
 
   /** notify 级别：只进 inbox，不唤醒（原生「注入不唤醒」）。 */
   async function inject({ agent, sessionId, text }) {
-    try {
-      if (typeof agent?.inject !== 'function') {
-        log('warn', '该 Agent 没有 inject()，notify 消息无法注入');
+    return withSessionLock(sessionId, async () => {
+      try {
+        if (typeof agent?.inject !== 'function') {
+          log('warn', '该 Agent 没有 inject()，notify 消息无法注入');
+          return false;
+        }
+        const result = agent.inject(buildUserMessage(text));
+        if (result && typeof result.then === 'function') await result;
+        return true;
+      } catch (error) {
+        log('warn', `向会话 ${sessionId} 注入上下文失败：${error?.message ?? error}`);
         return false;
       }
-      const result = agent.inject(buildUserMessage(text));
-      if (result && typeof result.then === 'function') await result;
-      return true;
-    } catch (error) {
-      log('warn', `向会话 ${sessionId} 注入上下文失败：${error?.message ?? error}`);
-      return false;
-    }
+    });
   }
 
   /** 插件卸载：先放掉等待中的轮次，再交还本插件创建的 agent handle。 */
