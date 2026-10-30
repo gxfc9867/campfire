@@ -180,18 +180,66 @@ export function createTools({ ctx, auth }) {
     };
   }
 
-  function searchMemory(args, { identity }) {
+  async function searchMemory(args, { identity }) {
     const query = requireString(args, 'query', { max: 500 });
     const chatId = optionalString(args, 'chatId', { max: 40 });
     if (chatId && !auth.canAccess(identity, chatId)) throw forbidden('无权检索该会话');
+    const k = optionalInt(args, 'k', { min: 1, max: 50 }) ?? 10;
+
+    const embedder = ctx.memoryService?.embedder;
+    if (!embedder) {
+      return {
+        query,
+        chatId: chatId || null,
+        k,
+        hits: [],
+        implemented: false,
+        // 明确说「没配」，比返回一堆假命中更诚实——客户端可以据此降级到 read_messages
+        note: '未配置 embedding 模型（MEMORY_EMBED_BASE_URL / MEMORY_EMBED_MODEL），无法做语义检索',
+      };
+    }
+
+    const targets = chatId
+      ? [chatId]
+      : store
+          .listChats()
+          .map((c) => c.id)
+          .filter((id) => auth.canAccess(identity, id));
+
+    const hits = [];
+    const errors = [];
+    for (const id of targets) {
+      try {
+        // 先补齐索引：增量、有上限，保证刚发的消息也能被搜到
+        await embedder.indexChat(id, { limit: 200 });
+        const found = await embedder.search({ chatId: id, query, k });
+        for (const hit of found) {
+          const message = store.getMessage(hit.messageId);
+          if (!message) continue;
+          hits.push({
+            chatId: id,
+            messageId: hit.messageId,
+            seq: hit.seq,
+            score: Number(hit.score.toFixed(4)),
+            sender: message.sender,
+            text: clip(message.text, SUMMARY_CHARS),
+            createdAt: message.createdAt,
+          });
+        }
+      } catch (error) {
+        // 单个会话失败不拖垮整个检索，错误随结果一起回，方便客户端判断是否要重试
+        errors.push({ chatId: id, message: error?.message ?? String(error) });
+      }
+    }
+
+    hits.sort((a, b) => b.score - a.score);
     return {
       query,
       chatId: chatId || null,
-      k: optionalInt(args, 'k', { min: 1, max: 50 }) ?? 10,
-      hits: [],
-      implemented: false,
-      // 明确说「还没做」，比返回一堆假命中更诚实——客户端可以据此降级到 read_messages
-      note: '向量 + 关键词混合检索在 M5 实现，当前为空实现（返回 0 条命中）',
+      k,
+      hits: hits.slice(0, k),
+      implemented: true,
+      ...(errors.length ? { errors } : {}),
     };
   }
 
@@ -218,6 +266,9 @@ export function createTools({ ctx, auth }) {
     const fromSeq = items.length ? items[0].seq : since ?? 0;
     const toSeq = items.length ? items[items.length - 1].seq : since ?? 0;
 
+    // 模型生成的滚动摘要（M5）：只在配了摘要模型时才有，否则退回窗口原文
+    const stored = ctx.memoryService?.summarizer ? store.getChatSummary(chatId) : null;
+
     return {
       chatId,
       chatName: chat.name,
@@ -225,7 +276,7 @@ export function createTools({ ctx, auth }) {
       toSeq,
       messageCount: items.length,
       participants: [...tally.values()].sort((a, b) => b.count - a.count),
-      // 只给最近几条的原文摘取，供客户端自己拼上下文；模型生成的滚动摘要留到 M5
+      // 原文摘取始终给：摘要可能滞后（按条数门槛触发），原文才是兜底
       recent: items.slice(-10).map((m) => {
         const view = messageView(m);
         return {
@@ -235,9 +286,14 @@ export function createTools({ ctx, auth }) {
           createdAt: view.createdAt,
         };
       }),
-      summary: null,
-      implemented: false,
-      note: '滚动摘要（模型生成）在 M5 实现，当前返回窗口内的原文摘取',
+      summary: stored?.summary ?? null,
+      coversUpToSeq: stored?.coversUpToSeq ?? 0,
+      implemented: Boolean(ctx.memoryService?.summarizer),
+      note: ctx.memoryService?.summarizer
+        ? stored
+          ? undefined
+          : '该会话还没有生成过摘要（新消息数未达门槛或尚未触发）'
+        : '未配置摘要模型（MEMORY_SUMMARY_BASE_URL / MEMORY_SUMMARY_MODEL），当前只有窗口内原文',
     };
   }
 
@@ -300,7 +356,7 @@ export function createTools({ ctx, auth }) {
       name: 'campfire_search_memory',
       title: '检索记忆',
       description:
-        '在会话历史与成员记忆里做检索（向量 + 关键词混合）。M2 为空实现，恒返回 0 条命中；需要内容请改用 campfire_read_messages。',
+        '按语义检索会话历史：给一句话，返回最相关的若干条消息（含相似度）。适合「之前谁提过 X」这类回忆，比逐条读便宜。需要服务端配置 embedding 模型，未配置时返回 implemented:false。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -318,7 +374,7 @@ export function createTools({ ctx, auth }) {
       name: 'campfire_get_summary',
       title: '会话摘要',
       description:
-        '取某个会话的滚动摘要快照：消息数、参与人、最近几条原文。since 指定起始 seq，省略则取最近 limit 条。M2 返回原文摘取，模型摘要留到 M5。',
+        '取某个会话的摘要：模型生成的滚动摘要（配了摘要模型时）+ 消息数、参与人、最近几条原文。since 指定起始 seq，省略则取最近 limit 条。',
       inputSchema: {
         type: 'object',
         properties: {

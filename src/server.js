@@ -6,6 +6,7 @@ import { logger } from './logger.js';
 import { Store } from './store.js';
 import { Members } from './members.js';
 import { Memory } from './memory.js';
+import { createMemoryService } from './memory/index.js';
 import { Presence } from './presence.js';
 import { InboxWaiters } from './outbox.js';
 import { EventHub } from './http/sse.js';
@@ -55,6 +56,8 @@ export function createApp(overrides = {}) {
     hub,
     auth,
     channels,
+    // 摘要 + 向量检索（M5）。没配模型时两个能力都是 null，调用方据此降级，不报错。
+    memoryService: createMemoryService({ store, log: logger.child('memory') }),
     log: logger.child('app'),
     version: readVersion(),
   };

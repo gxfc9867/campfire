@@ -381,6 +381,97 @@ test('search_memory：M2 是空实现，但形状完整', async () => {
   });
 });
 
+test('search_memory：配了 embedding 时返回命中（M5 接线）', async () => {
+  await withMcp(async (ctx) => {
+    const { session } = await connect(ctx);
+    const sent = await callTool(ctx, {
+      session,
+      name: 'campfire_send_message',
+      args: { chatId: 'main', text: '围炉的通道设计定了，用游标流' },
+    });
+    const message = sent.value.message;
+    assert.ok(message?.id, `拿不到消息 id：${JSON.stringify(sent.value).slice(0, 200)}`);
+
+    // 注入假 embedder：验的是「MCP 工具 → 记忆服务」的接线与结果整形，不验模型调用
+    const calls = [];
+    ctx.fixture.app.ctx.memoryService = {
+      enabled: true,
+      summarizer: null,
+      embedder: {
+        async indexChat(chatId, opts) {
+          calls.push(['index', chatId, opts?.limit]);
+          return { indexed: 1 };
+        },
+        async search({ chatId, query, k }) {
+          calls.push(['search', chatId, query, k]);
+          return [{ messageId: message.id, seq: message.seq, score: 0.9137 }];
+        },
+      },
+    };
+
+    const r = await callTool(ctx, { session, name: 'campfire_search_memory', args: { query: '游标流', chatId: 'main', k: 3 } });
+    assert.equal(r.isError, false, JSON.stringify(r.value));
+    assert.equal(r.value.implemented, true);
+    assert.equal(r.value.hits.length, 1);
+    assert.equal(r.value.hits[0].messageId, message.id);
+    assert.equal(r.value.hits[0].chatId, 'main');
+    assert.equal(r.value.hits[0].score, 0.9137);
+    assert.ok(r.value.hits[0].text.includes('游标流'), '命中里应带原文预览');
+
+    // 检索前会先补索引，否则刚发的消息搜不到
+    assert.deepEqual(calls[0], ['index', 'main', 200]);
+    assert.deepEqual(calls[1].slice(0, 2), ['search', 'main']);
+  });
+});
+
+test('search_memory：单个会话检索失败不影响其它会话', async () => {
+  await withMcp(async (ctx) => {
+    const { session } = await connect(ctx);
+    ctx.fixture.app.ctx.memoryService = {
+      enabled: true,
+      summarizer: null,
+      embedder: {
+        async indexChat() {
+          return { indexed: 0 };
+        },
+        async search() {
+          throw new Error('embedding 服务 503');
+        },
+      },
+    };
+
+    const r = await callTool(ctx, { session, name: 'campfire_search_memory', args: { query: '随便' } });
+    assert.equal(r.isError, false, '单点失败不应让整个调用变成错误');
+    assert.equal(r.value.implemented, true);
+    assert.deepEqual(r.value.hits, []);
+    assert.ok(Array.isArray(r.value.errors) && r.value.errors.length > 0, '应把失败原因随结果返回');
+  });
+});
+
+test('get_summary：配了摘要模型时带回滚动摘要', async () => {
+  await withMcp(async (ctx) => {
+    const { session } = await connect(ctx);
+    await callTool(ctx, { session, name: 'campfire_send_message', args: { chatId: 'main', text: '先把通道定下来' } });
+
+    const store = ctx.fixture.app.ctx.store;
+    store.upsertChatSummary({
+      chatId: 'main',
+      summary: '这群人把通道方案定了：游标流 + 幂等发送。',
+      coversUpToSeq: 1,
+      model: 'test-model',
+    });
+    ctx.fixture.app.ctx.memoryService = { enabled: true, embedder: null, summarizer: { async run() {} } };
+
+    const r = await callTool(ctx, { session, name: 'campfire_get_summary', args: { chatId: 'main' } });
+    assert.equal(r.isError, false);
+    assert.equal(r.value.implemented, true);
+    assert.equal(r.value.summary, '这群人把通道方案定了：游标流 + 幂等发送。');
+    assert.equal(r.value.coversUpToSeq, 1);
+    // 原文摘取仍然要给：摘要按条数门槛生成，可能滞后
+    assert.equal(r.value.recent.length, 1);
+  });
+});
+
 test('get_summary：给出消息数、参与人与最近原文', async () => {
   await withMcp(async (ctx) => {
     const { session } = await connect(ctx);
