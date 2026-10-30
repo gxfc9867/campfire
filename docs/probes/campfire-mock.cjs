@@ -29,6 +29,8 @@ const USAGE = `用法: node docs/probes/campfire-mock.cjs [选项]
   --member <s>      被 mock 的成员 handle，默认 ${DEFAULT_MEMBER}
   --display <s>     成员显示名，默认按 handle 推断
   --chat <s>        默认 chatId，默认 ${DEFAULT_CHAT}
+  --strict          按契约严格回包（错误体扁平、chatId 必填、只看自己会话、非法游标 400、
+                    不带 cursor 时用已确认位置）。跑 scripts/conformance.mjs 时开
   --verbose         打印每个请求的内部日志
   -h, --help        显示这段帮助`;
 
@@ -87,6 +89,7 @@ async function main() {
     memberDisplay: display,
     chatId: chat,
     quiet: args.verbose !== 'true',
+    strict: args.strict === 'true',
   });
 
   const { baseUrl } = await mock.start(port);

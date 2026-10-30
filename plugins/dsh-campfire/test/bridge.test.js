@@ -321,7 +321,9 @@ test('start/stop：后台拉流能收到消息，stop 后进程不再有挂起�
     assert.equal(ctx.mock.outbox().messages.length, 1);
 
     await ctx.bridge.stop();
-    assert.equal(ctx.store.getCursor('main'), 1);
+    // 回复自身也会回流入流（真围炉只有一条消息流），bridge 拉到后按 isSelf 跳过并推进游标，
+    // 所以这里只断言「注入的那条已被确认」，不锁死具体 seq。
+    assert.ok(ctx.store.getCursor('main') >= 1, `游标应已推进，实际 ${ctx.store.getCursor('main')}`);
   } finally {
     await ctx.close();
   }

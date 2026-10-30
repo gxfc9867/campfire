@@ -42,6 +42,9 @@ const MAX_WAIT_SEC = 30;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 
+/** 单条消息文本上限，与真围炉的 MAX_TEXT 默认值一致（meta.limits 要用）。 */
+const MAX_TEXT_LENGTH = 32000;
+
 /** /v1/meta 里声明的能力集。 */
 const MESSAGE_TYPES = ['text', 'markdown', 'system'];
 const WAKEUP_MODES = ['none', 'notify', 'reply'];
@@ -132,6 +135,14 @@ function createMockCampfire(options = {}) {
   const memberDisplay = String(options.memberDisplay || '发财');
   const defaultChatId = String(options.chatId || 'main');
   const verbose = options.quiet === false;
+  /**
+   * 严格模式：按 `docs/design/CONNECTION-DRAFT.md` 的契约行为回包，用于一致性测试
+   * （错误体扁平、chatId 必填、只能碰自己的会话、非法游标报 400、不带 cursor 时用已确认位置）。
+   *
+   * 默认关闭：M4 的单测断言的是一些宽松行为（缺 chatId 兜底成默认会话、结构化错误体），
+   * 加严会连带改一堆用例，收益不大。要验契约就 `--strict`。
+   */
+  const strict = options.strict === true;
 
   // ── 内存状态 ──────────────────────────────────────────────────────────
   /** chatId -> { id, seq, updates: [], acks: Map<handle, cursor> } */
@@ -284,6 +295,11 @@ function createMockCampfire(options = {}) {
   }
 
   function sendError(res, status, code, message, details = null) {
+    // 真围炉是扁平形状 { error: 人话, code: 机器码 }（前端 api.js 也按这个读）
+    if (strict) {
+      sendJson(res, status, { error: message, code });
+      return;
+    }
     sendJson(res, status, {
       error: { code, message, details, traceId: nextTraceId() },
     });
@@ -379,13 +395,27 @@ function createMockCampfire(options = {}) {
         editDelete: true,
         search: { vector: false, keyword: true },
       },
+      // 真围炉在 meta 里给上限，客户端据此做本地校验；缺了会被一致性测试判为契约不符
+      limits: { maxTextLength: MAX_TEXT_LENGTH, maxWaitSeconds: MAX_WAIT_SEC },
     });
   }
 
   /** GET /v1/updates —— 长轮询 */
   function handleUpdates(req, res, url) {
     const chatId = readString(url.searchParams.get('chat'), defaultChatId);
-    const cursor = clampInt(url.searchParams.get('cursor'), 0, 0, Number.MAX_SAFE_INTEGER);
+    if (strict && chatId !== defaultChatId) throw httpError(403, 'forbidden', '你不在这个会话里');
+
+    const rawCursor = url.searchParams.get('cursor');
+    if (strict && rawCursor !== null && (!Number.isFinite(Number(rawCursor)) || Number(rawCursor) < 0)) {
+      throw httpError(400, 'bad_request', 'cursor 非法');
+    }
+    // 不带 cursor 时：严格模式从「已确认的位置」继续（真围炉的行为），默认模式从 0 开始
+    const cursor =
+      rawCursor === null
+        ? strict
+          ? (ensureChat(chatId).acks.get(memberHandle) ?? 0)
+          : 0
+        : clampInt(rawCursor, 0, 0, Number.MAX_SAFE_INTEGER);
     const waitSec = clampNumber(url.searchParams.get('wait'), DEFAULT_WAIT_SEC, 0, MAX_WAIT_SEC);
     const limit = clampInt(url.searchParams.get('limit'), DEFAULT_LIMIT, 1, MAX_LIMIT);
 
@@ -415,9 +445,12 @@ function createMockCampfire(options = {}) {
   async function handlePostMessage(req, res) {
     const body = await readJsonBody(req);
 
+    if (strict && !body.chatId) throw httpError(400, 'bad_request', '缺少 chatId');
     const chatId = readString(body.chatId, defaultChatId);
+    if (strict && chatId !== defaultChatId) throw httpError(403, 'forbidden', '你不在这个会话里');
     const text = typeof body.text === 'string' ? body.text : '';
     if (!text.trim()) throw httpError(400, 'bad_request', 'text 不能为空');
+    if (text.length > MAX_TEXT_LENGTH) throw httpError(400, 'bad_request', `text 超过上限 ${MAX_TEXT_LENGTH}`);
 
     const type = readString(body.type, 'text');
     const replyTo = typeof body.replyTo === 'string' ? body.replyTo : null;
@@ -428,7 +461,8 @@ function createMockCampfire(options = {}) {
       const cached = clientMsgIds.get(`${chatId}\u0000${clientMsgId}`);
       if (cached) {
         log('幂等命中', chatId, clientMsgId);
-        sendJson(res, 201, { message: cached });
+        // 与真围炉一致：重复发送回 200 + duplicate 标记（首次是 201）
+        sendJson(res, 200, { message: cached, duplicate: true });
         return;
       }
     }
@@ -442,11 +476,15 @@ function createMockCampfire(options = {}) {
         replyTo,
         mentions: Array.isArray(body.mentions) ? body.mentions : [],
       },
-      { broadcast: false }, // 出站消息不回头喂给自己
+      // 真围炉只有一条消息流：自己发的也会回流，由客户端按 sender 过滤。
+      // 早先这里 broadcast:false「不喂给自己」，跟真围炉不一致，也让客户端的分支测不到。
+      { broadcast: true },
     );
 
     outboxMessages.push(message);
     if (clientMsgId) clientMsgIds.set(`${chatId}\u0000${clientMsgId}`, message);
+    // 出站消息也进了同一条流，挂起的轮询要立刻被叫醒（真围炉在写库后广播，同效）
+    pump();
 
     log('出站', message.id, `${chatId}:${message.seq}`);
     sendJson(res, 201, { message });
@@ -456,6 +494,10 @@ function createMockCampfire(options = {}) {
   async function handleAck(req, res) {
     const body = await readJsonBody(req);
     const chatId = readString(body.chat, defaultChatId);
+    // 默认模式把非法值静默夹到 0；严格模式按契约报 400，否则客户端会以为游标被接受了
+    if (strict && (typeof body.cursor !== 'number' || !Number.isFinite(body.cursor) || body.cursor < 0)) {
+      throw httpError(400, 'bad_request', 'cursor 非法');
+    }
     const cursor = clampInt(body.cursor, 0, 0, Number.MAX_SAFE_INTEGER);
 
     const chat = ensureChat(chatId);
