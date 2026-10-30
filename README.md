@@ -173,13 +173,16 @@ src/             服务端
   outbox.js        长轮询挂起表
   routes/          admin / messages / member-api / channel-api（v1）
   bridges/         外部 agent 桥（按 agent 分子目录）
+  mcp/             MCP 服务端（协议 / 传输 / 工具 / 鉴权）
+  memory/          滚动摘要 + 向量检索
+plugins/          agent 侧插件（dsh-campfire：围炉渠道）
 public/          前端（原生 ES 模块，无构建）
 sidecar/         宿主机客户端 + 自检
 adapters/        旧适配器（DSH / cbc-gateway，M3 后移除）
-scripts/         头像生成 / 静态检查 / 端到端冒烟
+scripts/         头像生成 / 静态检查 / 端到端冒烟 / 一致性测试
 test/            自动化测试
 docs/
-  design/        方案与决策（CONNECTION-DRAFT）
+  design/        方案与决策（CONNECTION-DRAFT / MCP-TOOLS / DSH-PLUGIN）
   handoffs/      交接与进度记录
   probes/        逆向探针（非生产代码，不含凭据）
 Dockerfile / docker-compose.yml   部署（保持仓库根，符合惯例）
@@ -190,9 +193,12 @@ Dockerfile / docker-compose.yml   部署（保持仓库根，符合惯例）
 ## 开发
 
 ```bash
-npm test     # 84 项
+npm test     # 178 项
 npm run smoke  # 桥 + sidecar + 假 CLI 的完整链路
 npm run check  # 语法、资源引用、敏感信息
+
+# 一致性测试：任何接入方跑一遍就知道合不合契约
+node scripts/conformance.mjs --base http://127.0.0.1:8099 --owner <主人口令> --member <handle>
 ```
 
 ## 许可
