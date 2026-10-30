@@ -14,6 +14,19 @@ import {
 import { initMembers } from './members.js';
 import { renderMarkdown } from './markdown.js';
 
+/** 生成唯一 clientId。crypto.randomUUID 需要 secure context（HTTPS/localhost），
+ *  局域网 HTTP 下不可用，所以用 getRandomValues 兜底。 */
+function randomId() {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  const bytes = c?.getRandomValues ? c.getRandomValues(new Uint8Array(16)) : null;
+  if (!bytes) return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 /**
  * 前端主逻辑。
  *
@@ -919,7 +932,7 @@ function bindComposer() {
     const text = input.value.trim();
     if (!text) return;
     send.disabled = true;
-    const clientId = crypto.randomUUID();
+    const clientId = randomId();
     const quote = state.quoting?.id || null;
     try {
       const res = await api.send(state.chatId, text, clientId, quote);
