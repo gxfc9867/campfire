@@ -10,6 +10,8 @@
  * 卸载时逆序收尾：停拉流 → 关客户端 → 释放本插件建的会话。
  */
 
+import { createRequire } from 'node:module';
+
 import { createBridge } from './src/bridge.js';
 import { createCampfireClient } from './src/campfire-client.js';
 import { createStateStore } from './src/bindings.js';
@@ -22,14 +24,18 @@ import { createDshHost } from './src/dsh-host.js';
  * 导出它的作用是让 DSH 知道有哪些可配项、类型与默认值，从而在插件界面里渲染表单，
  * 而不是逼用户去手改 `$DSH_HOME/campfire/config.json`。
  *
- * 这里用顶层 await + try/catch 而不是静态 import：本插件是零依赖的，从仓库目录
- * link 安装时解析不到 schemastery（它只存在于 DSH 自己的 node_modules 里）。
- * 那种情况下 Config 为 undefined，DSH 会当作「没有 schema」，配置仍然走配置文件，
- * 功能完全不受影响——所以有则用、无则退，不拿它当硬依赖。
+ * 两个刻意的选择：
+ *
+ * 1. **用 createRequire 同步加载，不用顶层 await。** 插件模块可能被加载器同步求值，
+ *    顶层 await 会让它变成异步模块，某些加载路径下会静默失败（实测 NAS 上就完全没加载）。
+ *    schemastery 有 CJS 构建，createRequire 能同步拿到。
+ * 2. **解析不到就不导出。** 本插件是零依赖的，从仓库目录 link 安装时拿不到
+ *    schemastery（它只存在于 DSH 自己的 node_modules 里）。那种情况下 Config 为
+ *    undefined，DSH 当作「没有 schema」，配置仍走配置文件，功能完全不受影响。
  */
 let Config;
 try {
-  const { default: Schema } = await import('schemastery');
+  const Schema = createRequire(import.meta.url)('schemastery');
   Config = Schema.object({
     baseUrl: Schema.string()
       .default('')
