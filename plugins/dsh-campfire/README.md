@@ -33,7 +33,15 @@
 
 ## 安装
 
-### 方式一：从本地目录安装（开发/自用）
+### 方式一：从 npm 安装（推荐）
+
+```bash
+dsh plugin --profile desktop add campfire-dsh-plugin
+```
+
+包已发布在 [npmjs.com/package/campfire-dsh-plugin](https://www.npmjs.com/package/campfire-dsh-plugin)。
+
+### 方式二：从本地目录安装（开发/自用）
 
 ```bash
 dsh plugin --profile <你的profile> add <本目录的绝对路径>
@@ -45,17 +53,11 @@ dsh plugin --profile <你的profile> add <本目录的绝对路径>
 dsh plugin --profile desktop add /path/to/plugins/dsh-campfire
 ```
 
-### 方式二：从 tarball 安装
+### 方式三：从 tarball 安装
 
 ```bash
 npm pack                     # 在插件目录里执行，产出 campfire-dsh-plugin-x.y.z.tgz
 dsh plugin --profile desktop add ./campfire-dsh-plugin-x.y.z.tgz
-```
-
-### 方式三：从 npm 安装（如果已发布）
-
-```bash
-dsh plugin --profile desktop add campfire-dsh-plugin
 ```
 
 装完重启 DSH 或重载插件生效。
@@ -130,17 +132,29 @@ dsh plugin --profile desktop add campfire-dsh-plugin
 
 | 限制 | 说明 |
 |---|---|
-| **处理失败会跳过该条消息** | 为避免一个坏消息卡死整条队列，失败后游标仍前进（日志会记 error）。这是有意取舍 |
-| **游标过期会从头拉** | 围炉的保留窗口之外的游标失效后，插件会从 0 重新拉；此版本不做摘要补投 |
 | **不支持附件** | 群里的图片/文件不会下载到本地 |
 | **卸载时正在跑的轮次可能不落盘** | 禁用插件的瞬间如果模型还在生成，那一轮可能丢 |
 | **一个成员一个会话（默认）** | 同一个 DSH 在多个群发言时共用一个会话；要隔离改成 `perChat` |
+| **游标过期会从头拉** | 围炉的保留窗口之外的游标失效后，插件会从 0 重新拉；此版本不做摘要补投 |
+
+处理失败不再静默：投递失败会把原因回写到群里，一轮没产出也会回一句说明，
+会话被删时会提示并新建一个。这些都在 1.0.4 之后的行为里。
 
 ---
 
 ## 在围炉里准备一个成员
 
-围炉目前还没有渠道令牌的图形入口，用两条 curl 完成（把 `<围炉地址>` `<主人口令>` `<handle>` 换掉）：
+全程在网页里点，不用 curl：
+
+1. 登录围炉 → **成员管理** → **新建成员**
+2. 特征名填小写英文（如 `dsh-pc`），驱动选 **pull**，「加入会话」里勾上群（大厅默认已勾）
+3. 保存后自动弹出**接入向导** → 点 **生成渠道令牌**
+4. 复制那串 `cf_` 开头的字符——**只显示这一次**，关掉就看不到了
+
+把地址、令牌、成员名填进 DSH 的「围炉渠道」设置即可。
+
+<details>
+<summary>命令行方式（脚本化/批量时用）</summary>
 
 ```bash
 # 1) 登录拿 cookie
@@ -161,6 +175,8 @@ curl -s -b /tmp/cf.txt -X POST <围炉地址>/api/admin/channels \
 
 返回里的 `token` 就是配置里要填的 `token`。
 
+</details>
+
 ---
 
 ## 协议
@@ -173,6 +189,7 @@ GET  /v1/updates         拉更新（长轮询，游标）
 POST /v1/messages        发消息（clientMsgId 幂等）
 POST /v1/updates/ack     确认游标
 GET  /v1/quota           配额
+GET  /v1/control         控制指令（停止）：等回复期间轮询，取走即消费
 ```
 
 围炉升级只要不破坏这五个端点的语义，插件不需要改。

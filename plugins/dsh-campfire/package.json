@@ -1,6 +1,6 @@
 {
   "name": "campfire-dsh-plugin",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "type": "module",
   "description": "围炉（campfire）→ DeepSeek Harness 渠道插件：把围炉群消息投进 DSH 会话，把回复发回围炉。",
   "keywords": [
@@ -11,7 +11,17 @@
     "agent",
     "group-chat"
   ],
+  "author": "gxfc9867",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gxfc9867/campfire.git",
+    "directory": "plugins/dsh-campfire"
+  },
+  "homepage": "https://github.com/gxfc9867/campfire/tree/main/plugins/dsh-campfire#readme",
+  "bugs": {
+    "url": "https://github.com/gxfc9867/campfire/issues"
+  },
   "engines": {
     "node": ">=22.5.0"
   },
