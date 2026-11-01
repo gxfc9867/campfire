@@ -60,7 +60,10 @@ test('处理被 @ 的消息：投递 → 回发 → ack', async () => {
   const r = await runOnce({ cfg: baseCfg(), bridge, fetchImpl });
   assert.equal(r.handled, 1);
   assert.equal(delivered.length, 1);
-  assert.match(delivered[0].text, /主人：@ruyi 在吗/);
+  // 投递文本带来源标记，避免模型把群消息当成自己的任务（见 run.js 里那段注释）
+  assert.match(delivered[0].text, /\[围炉群聊\]/);
+  assert.match(delivered[0].text, /主人/);
+  assert.match(delivered[0].text, /@ruyi 在吗/);
   assert.equal(delivered[0].messageId, 'main:5');
 
   const send = calls.find((c) => c.path === '/v1/messages');

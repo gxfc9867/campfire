@@ -80,7 +80,9 @@ export async function runOnce({ cfg, bridge, fetchImpl = fetch, log = null }) {
     if (!update.replyRequired) continue;
     if (update.message?.sender?.handle === member) continue; // 自己的发言不回
 
-    const text = `${update.message.sender.display || update.message.sender.handle}：${update.message.text}`;
+    const from = update.message.sender.display || update.message.sender.handle;
+    // 明确标注来源与期望：否则模型会结合会话历史自己猜（曾把群聊消息当成「测旧桥链路」）
+    const text = `[围炉群聊] ${from} 说：${update.message.text}\n\n（这是围炉群聊里的一条新消息，直接用一两句话回复即可，不要做与回复无关的探测。）`;
     const out = await bridge.deliver({
       sessionId,
       cwd,
