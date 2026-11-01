@@ -2,6 +2,8 @@ import { MAIN_CHAT, SENDER, JOB_STATUS, DRIVER } from '../constants.js';
 import { badRequest, notFound } from '../errors.js';
 import { readJson, sendJson, prepareStream, createLimiter, clientIp } from '../http/util.js';
 import { parseTargets } from '../targets.js';
+import { requestStop } from '../control.js';
+import { toMarkdown, toJson, exportBaseName } from '../export.js';
 import { shortId } from '../id.js';
 import { deliverWebhook } from '../drivers/webhook.js';
 import { deliverLlm } from '../drivers/llm.js';
@@ -43,6 +45,17 @@ export function registerMessageRoutes(router, ctx) {
    * 三种入口（@提及、显式指定、私聊）共用这一处，避免某条路径漏掉新驱动。
    */
   function enqueue(member, { chatId, messageId, text, sender }) {
+    /**
+     * 通过渠道令牌接入的成员（DSH 插件、WorkBuddy 桥）走 /v1/updates 游标流，
+     * 从来不会来认领 job。给它建 job 的唯一下场就是 10 分钟后超时，然后往群里
+     * 插一条「@xxx 的这条消息还没被处理」的噪音——而消息其实早就送到了。
+     */
+    const viaChannel = (ctx.channels?.list?.(member.handle) || []).some((c) => !c.revokedAt);
+    if (viaChannel) {
+      log.debug(`跳过 job：${member.handle} 通过渠道令牌接入，走 /v1/updates 游标流`);
+      return null;
+    }
+
     const job = store.createJob({
       chatId,
       messageId,
@@ -107,11 +120,21 @@ export function registerMessageRoutes(router, ctx) {
     for (const handle of targets) {
       const member = members.get(handle);
       if (!member) continue;
-      jobs.push(enqueue(member, { chatId, messageId, text, sender }));
+      const job = enqueue(member, { chatId, messageId, text, sender });
+      if (job) jobs.push(job);
     }
 
     return jobs;
   }
+
+  /**
+   * 把成员投递能力挂到 ctx，供渠道 API 复用。
+   *
+   * 成员通过 /v1/messages 发言时也要能 @ 到别的成员 —— 那条路径之前只落库不投递，
+   * 表现就是「agent 之间怎么 @ 都没反应」。挂在这里而不是抽成模块，是因为
+   * fanout/enqueue 依赖本函数的闭包（store、members、waiters、planner、log）。
+   */
+  ctx.deliverToMembers = fanout;
 
   async function createAndDeliver({ chatId, sender, text, clientId, explicitTargets, replyTo = null }) {
     const chat = store.getChat(chatId);
@@ -135,7 +158,8 @@ export function registerMessageRoutes(router, ctx) {
       // 私聊不用 @：说给谁就发给谁。发消息的人如果是成员自己（理论上不该走到这里），不再回投。
       const peer = chat.peer ? members.get(chat.peer) : null;
       if (peer && !peer.archivedAt && peer.handle !== sender) {
-        jobs.push(enqueue(peer, { chatId, messageId: message.id, text: body, sender }));
+        const job = enqueue(peer, { chatId, messageId: message.id, text: body, sender });
+        if (job) jobs.push(job);
       }
     } else if (Array.isArray(explicitTargets) && explicitTargets.length) {
       // 允许显式指定收件人（不一定要在正文里 @）
@@ -143,7 +167,8 @@ export function registerMessageRoutes(router, ctx) {
         .map((h) => members.get(String(h)))
         .filter((m) => m && !m.archivedAt && m.handle !== sender);
       for (const m of valid) {
-        jobs.push(enqueue(m, { chatId, messageId: message.id, text: body, sender }));
+        const job = enqueue(m, { chatId, messageId: message.id, text: body, sender });
+        if (job) jobs.push(job);
       }
     } else {
       jobs = fanout({ chatId, messageId: message.id, text: body, sender });
@@ -157,9 +182,11 @@ export function registerMessageRoutes(router, ctx) {
 
   router.get(
     '/api/chats',
-    (req, res) => {
+    (req, res, url) => {
+      const wantArchived = url.searchParams.get('archived') === '1';
       const unread = store.unreadCounts();
-      const chats = store.listChats().map((c) => {
+      const source = wantArchived ? store.listArchivedChats() : store.listChats();
+      const chats = source.map((c) => {
         // 单聊带上对端的显示信息：侧栏要画它的头像，而不是一个首字母
         const peerMember = c.kind === 'dm' && c.peer ? members.get(c.peer) : null;
         return {
@@ -181,7 +208,40 @@ export function registerMessageRoutes(router, ctx) {
           unread: unread[c.id] || 0,
         };
       });
-      sendJson(res, 200, { chats, main: MAIN_CHAT.id });
+      sendJson(res, 200, { chats, main: MAIN_CHAT.id, archived: wantArchived });
+    },
+    { auth: 'owner' },
+  );
+
+  /**
+   * 归档会话：只是从列表里收起来，成员归属不动，随时可以恢复。
+   * 和「解散」的区别：解散会顺带把成员从这个群移除（members.dropChat）。
+   */
+  router.post(
+    /^\/api\/chats\/([A-Za-z0-9_-]{1,40})\/archive$/,
+    (req, res, url, identity, id) => {
+      if (id === MAIN_CHAT.id) throw badRequest('大厅是主会话，不能归档');
+      const chat = store.getChat(id);
+      if (!chat) throw notFound('会话不存在');
+      if (chat.archivedAt) throw badRequest('该会话已经在归档里了');
+      store.archiveChat(id);
+      log.info(`归档会话 ${id}（${chat.name}）`);
+      hub.emit('change', { type: 'chat' });
+      sendJson(res, 200, { ok: true });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 把归档的会话放回列表。成员归属保持原样（归档时本来就没动）。 */
+  router.post(
+    /^\/api\/chats\/([A-Za-z0-9_-]{1,40})\/restore$/,
+    (req, res, url, identity, id) => {
+      const chat = store.getChat(id);
+      if (!chat) throw notFound('会话不存在');
+      if (!chat.archivedAt) throw badRequest('该会话没有被归档');
+      const restored = store.restoreChat(id);
+      hub.emit('change', { type: 'chat' });
+      sendJson(res, 200, { chat: restored });
     },
     { auth: 'owner' },
   );
@@ -211,6 +271,74 @@ export function registerMessageRoutes(router, ctx) {
       const chat = store.createChat(name);
       hub.emit('change', { type: 'chat' });
       sendJson(res, 200, { chat });
+    },
+    { auth: 'owner' },
+  );
+
+  /**
+   * 导出整个会话。
+   *
+   * format=md（默认）给人看也给 agent 看；format=json 给需要程序处理的场景。
+   * 全量导出不分页：会话再长也是一次读完，避免分页边界把最后几条漏掉。
+   */
+  router.get(
+    /^\/api\/chats\/([^/]+)\/export$/,
+    (req, res, url, identity, chatId) => {
+      const chat = store.getChat(chatId);
+      if (!chat) throw notFound('会话不存在');
+
+      const format = String(url.searchParams.get('format') || 'md').toLowerCase();
+      const messages = store.listAllMessages(chatId);
+
+      // 参与成员：群归属优先，再补上「发过言但已不在群里」的，避免显示成裸 handle
+      const memberMap = new Map();
+      for (const h of store.listMembersOf(chatId)) {
+        const m = members.get(h);
+        if (m) memberMap.set(h, m);
+      }
+      for (const msg of messages) {
+        if (msg.sender === SENDER.user || msg.sender === SENDER.system) continue;
+        if (memberMap.has(msg.sender)) continue;
+        const m = members.get(msg.sender);
+        if (m) memberMap.set(msg.sender, m);
+      }
+
+      const exportedAt = Date.now();
+      const base = exportBaseName(chat, exportedAt);
+
+      if (format === 'json') {
+        return sendJson(res, 200, toJson({ chat, messages, members: memberMap, exportedAt }), {
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${base}.json`)}`,
+          'Cache-Control': 'no-store',
+        });
+      }
+
+      const md = toMarkdown({ chat, messages, members: memberMap, exportedAt });
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${base}.md`)}`,
+        'Cache-Control': 'no-store',
+      });
+      res.end(md);
+    },
+    { auth: 'owner' },
+  );
+
+  /**
+   * 停止：让正在跑这一轮的成员中断生成。
+   *
+   * 只往内存里放一个带 TTL 的标记，由成员通过 /v1/control 取走 —— 它这时候
+   * 正卡在等回复里，收不到普通消息，只能用独立短轮询取。
+   */
+  router.post(
+    '/api/stop',
+    async (req, res) => {
+      const body = await readJson(req, 4096);
+      const chatId = String(body.chat || MAIN_CHAT.id);
+      if (!store.getChat(chatId)) throw notFound('会话不存在');
+      requestStop(chatId);
+      hub.emit('change', { type: 'control', chatId });
+      sendJson(res, 200, { ok: true, chat: chatId });
     },
     { auth: 'owner' },
   );

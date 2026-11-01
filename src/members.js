@@ -29,7 +29,6 @@ function defaults() {
     display: '',
     avatar: 'initial',
     avatarSalt: 0,
-    persona: '',
     driver: { type: DRIVER.pull },
     chats: [],
     aliases: [],
@@ -70,7 +69,6 @@ function normalize(input, prev = null) {
     display,
     avatar: normalizeAvatar(input.avatar ?? base.avatar),
     avatarSalt: clampInt(input.avatarSalt ?? base.avatarSalt, 0, 1e9, 0),
-    persona: String(input.persona ?? base.persona ?? '').slice(0, 4000),
     driver,
     chats,
     aliases,
@@ -196,7 +194,6 @@ export function publicView(m, { withChats = true } = {}) {
     display: m.display,
     avatar: m.avatar,
     avatarSalt: m.avatarSalt,
-    persona: m.persona,
     driver: maskDriver(m.driver),
     driverType: m.driver?.type || DRIVER.pull,
     chats: withChats ? m.chats : undefined,
@@ -388,6 +385,29 @@ export class Members {
     m.archivedAt = null;
     this.#save();
     return m;
+  }
+
+  /**
+   * 彻底删除：从配置里真正移除这条记录。
+   *
+   * 和 archive 的区别：archive 只是打上 archivedAt，记录还在，密钥仍可校验、
+   * 历史消息的 sender 也还能解析出名字；purge 是把它从 members.json 里抹掉。
+   *
+   * 历史消息不受影响——messages.sender 存的是 handle 字符串，没有外键。
+   * 代价是以后读旧消息时这个名字不会再被解析成成员（显示原 handle）。
+   * 渠道令牌由调用方一并吊销，这里不碰 channels 表。
+   */
+  purge(handle, expectedEtag) {
+    this.reload();
+    if (expectedEtag && expectedEtag !== this.hash) {
+      throw conflict('成员配置已被其他人修改，请刷新后重试');
+    }
+    const idx = this.items.findIndex((m) => m.handle === handle);
+    if (idx < 0) throw notFound('成员不存在');
+    this.items.splice(idx, 1);
+    this.#save();
+    log.info(`彻底删除成员 ${handle}`);
+    return { handle };
   }
 
   /** 成员密钥校验，用定时安全比较避免按字节猜。 */

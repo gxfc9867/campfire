@@ -30,6 +30,15 @@ function bind() {
   $('#btn-close-editor').addEventListener('click', closeEditor);
   $('#btn-cancel-edit').addEventListener('click', closeEditor);
   $('#btn-archive').addEventListener('click', archive);
+  // 编辑已有成员时也要能回到接入设置：DSH 插件换令牌、换群都在这页
+  $('#btn-connect-from-editor').addEventListener('click', () => {
+    if (!state.editing) return;
+    openConnect(state.editing);
+  });
+  $('#btn-purge').addEventListener('click', () => {
+    const m = state.members.find((x) => x.handle === state.editing);
+    if (m) confirmPurge(m);
+  });
   $('#btn-roll-avatar').addEventListener('click', rollAvatar);
   $('#editor-form').addEventListener('submit', save);
 
@@ -38,6 +47,12 @@ function bind() {
   $('#btn-rotate-key').addEventListener('click', rotateKey);
   $('#btn-probe').addEventListener('click', probeMember);
   $$('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copyBlock(btn)));
+
+  // 已归档成员：展开时才拉数据
+  const archivedSection = document.getElementById('archived-members-section');
+  archivedSection?.addEventListener('toggle', () => {
+    if (archivedSection.open) refreshArchivedMembers();
+  });
 
   $$('input[name="driverType"]').forEach((r) =>
     r.addEventListener('change', () => syncDriverFields()),
@@ -72,6 +87,68 @@ async function reload() {
     renderGrid();
   } catch (ex) {
     toast(ex instanceof ApiError ? ex.message : '加载成员失败');
+  }
+}
+
+/** 已归档成员：默认收起，展开时才拉数据。 */
+async function refreshArchivedMembers() {
+  const list = document.getElementById('archived-members-list');
+  const countEl = document.getElementById('archived-members-count');
+  if (!list) return;
+
+  try {
+    const res = await api.members({ archived: true });
+    const items = res.members || [];
+    if (countEl) countEl.textContent = items.length ? `(${items.length})` : '';
+    list.textContent = '';
+
+    if (!items.length) {
+      const p = document.createElement('p');
+      p.className = 'archive-empty';
+      p.textContent = '没有归档的成员';
+      list.append(p);
+      return;
+    }
+
+    for (const m of items) {
+      const row = document.createElement('div');
+      row.className = 'archive-row';
+
+      const name = document.createElement('span');
+      name.className = 'archive-row-name';
+      name.textContent = `${m.display} @${m.handle}`;
+
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'text-btn';
+      restore.textContent = '恢复';
+      restore.addEventListener('click', async () => {
+        try {
+          await api.restoreMember(m.handle);
+          toast(`已恢复「${m.display}」`);
+          await reload();
+          refreshArchivedMembers();
+          onChanged();
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+
+      const purge = document.createElement('button');
+      purge.type = 'button';
+      purge.className = 'text-btn danger';
+      purge.textContent = '彻底删除';
+      purge.addEventListener('click', () => confirmPurge(m));
+
+      row.append(name, restore, purge);
+      list.append(row);
+    }
+  } catch (e) {
+    list.textContent = '';
+    const p = document.createElement('p');
+    p.className = 'archive-empty';
+    p.textContent = `读取失败：${e.message}`;
+    list.append(p);
   }
 }
 
@@ -111,7 +188,6 @@ function renderGrid() {
       `<span class="dot ${label.cls}"></span>` +
       `<span class="badge ${label.cls}">${label.text}</span></div>` +
       `<div class="member-card-handle">@${esc(m.handle)}</div>` +
-      `<div class="member-card-persona">${esc(m.persona || '还没有人设')}</div>` +
       `<div class="member-card-foot">` +
       `<span>${esc(driverText)}</span>` +
       `<span>${m.chats.length} 个会话</span>` +
@@ -124,16 +200,22 @@ function renderGrid() {
     hit.append(av, main);
     hit.addEventListener('click', () => openEditor(m.handle));
 
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'btn-sm';
+    edit.textContent = '编辑';
+    edit.addEventListener('click', () => openEditor(m.handle));
+
     const wire = document.createElement('button');
     wire.type = 'button';
-    wire.className = 'text-btn member-card-wire';
-    wire.textContent = m.driverType === 'llm' || label.cls === 'ok' ? '接入信息' : '接入引导';
+    wire.className = 'btn-sm';
+    wire.textContent = '接入';
     wire.addEventListener('click', () => openConnect(m.handle));
 
     // 单聊入口：卡片上直接给，不用先回大厅再找它
     const dm = document.createElement('button');
     dm.type = 'button';
-    dm.className = 'text-btn member-card-wire is-dm';
+    dm.className = 'btn-sm';
     dm.textContent = '私聊';
     dm.addEventListener('click', async () => {
       close();
@@ -144,9 +226,15 @@ function renderGrid() {
       }
     });
 
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn-sm danger';
+    del.textContent = '删除';
+    del.addEventListener('click', () => confirmPurge(m));
+
     const actions = document.createElement('div');
     actions.className = 'member-card-actions';
-    actions.append(dm, wire);
+    actions.append(edit, dm, wire, del);
 
     card.append(hit, actions);
     grid.append(card);
@@ -160,6 +248,53 @@ function renderGrid() {
  * 只查服务端掌握的事实（sidecar 在不在、上次活跃时间、唤醒决策），
  * 不真的拉起进程——真跑一次命令是「深度测试」，交给 doctor。
  */
+/**
+ * 页面内信息弹窗。
+ *
+ * 不用 alert()：原生弹窗位置由浏览器决定，在小窗口里会顶出可视区，
+ * 而且样式完全不可控。这里自己画一个居中的卡片，内容再多也能滚动。
+ */
+function showInfoDialog(title, rows) {
+  document.getElementById('cf-info-dialog')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cf-info-dialog';
+  overlay.className = 'cf-dialog-overlay';
+
+  const card = document.createElement('div');
+  card.className = 'cf-dialog';
+
+  const h = document.createElement('h3');
+  h.textContent = title;
+  card.append(h);
+
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.className = 'cf-dialog-row';
+    const l = document.createElement('span');
+    l.className = 'cf-dialog-label';
+    l.textContent = label;
+    const v = document.createElement('span');
+    v.className = 'cf-dialog-value';
+    v.textContent = value;
+    row.append(l, v);
+    card.append(row);
+  }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'primary-btn';
+  btn.textContent = '知道了';
+  btn.addEventListener('click', () => overlay.remove());
+  card.append(btn);
+
+  overlay.append(card);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  document.body.append(overlay);
+}
+
 async function probeMember() {
   const handle = state.editing;
   if (!handle) return;
@@ -172,26 +307,26 @@ async function probeMember() {
 
     // llm 型是真的打了一次模型接口，结果直接说人话
     if (r.driverType === 'llm') {
-      alert(
-        `成员 ${handle}（大模型直连）\n\n` +
-          (r.ok
-            ? `结果：通了\n模型：${r.model}\n耗时：${(r.latencyMs / 1000).toFixed(1)} 秒\n它说：${r.reply}`
-            : `结果：没通\n耗时：${(r.latencyMs / 1000).toFixed(1)} 秒\n原因：${r.hint}`),
-      );
+      showInfoDialog(`成员 ${handle} · 大模型直连`, [
+        ['结果', r.ok ? '通了' : '没通'],
+        ['模型', r.ok ? r.model : '—'],
+        ['耗时', `${(r.latencyMs / 1000).toFixed(1)} 秒`],
+        [r.ok ? '它说' : '原因', r.ok ? r.reply : r.hint],
+      ]);
       return;
     }
 
-    const seen = r.lastSeenAt ? new Date(r.lastSeenAt).toLocaleTimeString() : '从未';
-    const stateText = { hot: '长轮询挂起中', warm: '低频轮询', cold: '离线', wake: '唤醒中' }[r.state] || r.state;
-    alert(
-      `成员 ${handle}（${r.driverType}）\n\n` +
-        `通道：${r.reachable ? '已连接' : '未连接'}\n` +
-        `状态：${stateText}\n` +
-        `可立即响应：${r.ready ? '是' : '否'}\n` +
-        `最近活跃：${seen}\n` +
-        `全局连接：长轮询 ${r.polls} 条\n\n` +
-        `${r.hint}`,
-    );
+    const seen = r.lastSeenAt ? new Date(r.lastSeenAt).toLocaleString() : '从未';
+    const stateText =
+      { hot: '长轮询挂起中', warm: '低频轮询', cold: '离线', wake: '唤醒中' }[r.state] || r.state;
+    showInfoDialog(`成员 ${handle} · ${r.driverType}`, [
+      ['通道', r.reachable ? '已连接' : '未连接'],
+      ['状态', stateText],
+      ['可立即响应', r.ready ? '是' : '否'],
+      ['最近活跃', seen],
+      ['全局连接', `长轮询 ${r.polls} 条`],
+      ['说明', r.hint],
+    ]);
   } catch (ex) {
     toast(ex instanceof ApiError ? ex.message : '测试失败');
   } finally {
@@ -221,7 +356,11 @@ async function openConnect(handle, key) {
 
   $('#connect-name').textContent = connect.name;
   $('#member-connect').hidden = false;
-  setConnectState('waiting', member?.presence?.reachable ? '正在确认状态…' : '等待 sidecar 连上来…');
+  const waitingText =
+    driverType === 'pull'
+      ? '插件还没连上来 · 在 DSH 里填好三项并重启后，这里会自动变绿'
+      : '等待 sidecar 连上来…';
+  setConnectState('waiting', member?.presence?.reachable ? '正在确认状态…' : waitingText);
 
   // 密钥可能没随列表下发明文，单独取一次；失败就留空让用户点「显示」重试
   if (!connect.key) {
@@ -243,8 +382,137 @@ async function openConnect(handle, key) {
 function renderConnectForLlm() {
   $('#connect-manual').hidden = true;
   $('#connect-ready').hidden = false;
+  $('#connect-dsh').hidden = true;
   $('#connect-lead').hidden = true;
   setConnectState('online', '已就绪 · 回群里 @ 它试试');
+}
+
+/* ── pull 驱动（DSH 插件 / WorkBuddy 桥）：走渠道令牌 ─────────────── */
+
+/** 刚生成的渠道令牌明文：只活在本次弹层里，服务端之后不会再回传。 */
+let freshChannelToken = '';
+
+function el(tag, props, ...children) {
+  const node = document.createElement(tag);
+  if (props) {
+    for (const [k, v] of Object.entries(props)) {
+      if (v === undefined || v === null) continue;
+      if (k === 'class') node.className = v;
+      else if (k === 'text') node.textContent = v;
+      else node.setAttribute(k, v);
+    }
+  }
+  for (const c of children) if (c) node.append(c);
+  return node;
+}
+
+async function renderConnectForDsh() {
+  $('#connect-manual').hidden = true;
+  $('#connect-ready').hidden = true;
+  $('#connect-dsh').hidden = false;
+  $('#connect-lead').hidden = true;
+  // 成员密钥是给 sidecar 用的，pull 路线用不上，藏掉免得误导
+  $('.connect-key').hidden = true;
+
+  await renderChannelArea();
+  renderDshParams();
+}
+
+/** 第 1 步：渠道令牌的生成 / 列表 / 吊销。 */
+async function renderChannelArea() {
+  const area = $('#connect-channel-area');
+  if (!area) return;
+  area.textContent = '';
+
+  let channels = [];
+  try {
+    const res = await api.channels(connect.handle);
+    channels = (res.channels || []).filter((c) => !c.revokedAt);
+  } catch (error) {
+    area.append(el('p', { class: 'field-error', text: `读取渠道令牌失败：${error.message}` }));
+    return;
+  }
+
+  // 刚生成的明文：最显眼的位置，带复制
+  if (freshChannelToken) {
+    const copyBtn = el('button', { type: 'button', class: 'text-btn' }, '复制');
+    copyBtn.addEventListener('click', () => copyText(freshChannelToken, copyBtn));
+    area.append(
+      el(
+        'div',
+        { class: 'code-box' },
+        el(
+          'div',
+          { class: 'code-head' },
+          el('span', { text: '刚生成的令牌（只显示这一次）' }),
+          copyBtn,
+        ),
+        el('pre', { text: freshChannelToken }),
+      ),
+      el('p', { class: 'field-hint', text: '关掉这个窗口就再也看不到明文了。没记下就删掉重新生成一把。' }),
+    );
+  }
+
+  if (channels.length) {
+    const list = el('div', { class: 'channel-list' });
+    for (const ch of channels) {
+      const row = el(
+        'div',
+        { class: 'channel-row' },
+        el('span', { class: 'channel-name', text: ch.name || ch.id }),
+        el('span', { class: 'channel-meta', text: `创建于 ${fmtRelative(ch.createdAt)}` }),
+      );
+      const revoke = el('button', { type: 'button', class: 'text-btn danger' }, '吊销');
+      revoke.addEventListener('click', async () => {
+        if (!window.confirm(`吊销令牌「${ch.name || ch.id}」？用它接入的客户端会立刻 401。`)) return;
+        try {
+          await api.revokeChannel(ch.id);
+          toast('已吊销');
+          freshChannelToken = '';
+          await renderChannelArea();
+          renderDshParams();
+        } catch (error) {
+          toast(error.message);
+        }
+      });
+      row.append(revoke);
+      list.append(row);
+    }
+    area.append(list);
+  }
+
+  // 首次生成用主按钮：这是整个接入流程的起点，藏成文字链会让人找不到
+  const btn = el(
+    'button',
+    { type: 'button', class: channels.length ? 'ghost-btn' : 'primary-btn' },
+    channels.length ? '再生成一把' : '生成渠道令牌',
+  );
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const res = await api.createChannel(connect.handle, `${connect.name}-dsh`);
+      freshChannelToken = res.token || '';
+      toast('令牌已生成，明文只显示这一次');
+      await renderChannelArea();
+      renderDshParams();
+    } catch (error) {
+      toast(error.message);
+      btn.disabled = false;
+    }
+  });
+  area.append(el('div', { class: 'channel-actions' }, btn));
+}
+
+/** 第 2 步：把要填进 DSH 的三项摆出来。 */
+function renderDshParams() {
+  const pre = $('#connect-dsh-params');
+  if (!pre) return;
+  const base = publicBase();
+  const tokenLine = freshChannelToken || '（第 1 步生成的那把，复制过来）';
+  pre.textContent =
+    `围炉地址      ${base}\n` +
+    `渠道令牌      ${tokenLine}\n` +
+    `成员特征名    ${connect.handle}`;
 }
 
 /** 去主界面，把一句现成的开场白填进输入框——让「测一下」变成一次回车。 */
@@ -257,6 +525,7 @@ function tryMember() {
 function closeConnect() {
   if (connect.timer) clearTimeout(connect.timer);
   connect = { handle: '', key: '', name: '', driverType: '', timer: null, shown: false };
+  freshChannelToken = '';
   $('#member-connect').hidden = true;
   // 从「新建」流程进来的，关掉接入页才算真正结束，此时回到列表
   if (!$('#member-editor').hidden) closeEditor();
@@ -275,8 +544,14 @@ function renderConnect() {
     $('.connect-key').hidden = true;
     return;
   }
+  // pull 驱动走的是渠道令牌 + /v1 接口（DSH 插件、WorkBuddy 桥），和 sidecar 完全两套
+  if (connect.driverType === 'pull') {
+    renderConnectForDsh();
+    return;
+  }
   $('#connect-manual').hidden = false;
   $('#connect-ready').hidden = true;
+  $('#connect-dsh').hidden = true;
   $('#connect-lead').hidden = false;
   $('.connect-key').hidden = false;
 
@@ -368,16 +643,69 @@ async function rotateKey() {
   }
 }
 
+/**
+ * 复制到剪贴板。
+ *
+ * navigator.clipboard 只在 secure context（HTTPS / localhost）里可用，而围炉
+ * 通常是局域网 http 部署（http://192.168.x.x:8099），那种情况下 API 直接不可用，
+ * 必须退回 execCommand('copy')——否则「复制」按钮就是个摆设。
+ */
+async function copyToClipboard(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 继续走下面的兜底
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    // 用「移出屏幕」而不是 opacity:0 —— 后者在部分浏览器里选不中文本，
+    // execCommand('copy') 会拿到空串，表现为「点了复制但剪贴板没变」。
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    ta.style.fontSize = '12pt';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 async function copyBlock(btn) {
   const target = document.getElementById(btn.dataset.copy);
   const text = target?.textContent || '';
-  try {
-    await navigator.clipboard.writeText(text);
+  const ok = await copyToClipboard(text);
+  if (!ok) {
+    toast('浏览器不允许自动复制，请手动选中');
+    return;
+  }
+  const old = btn.textContent;
+  btn.textContent = '已复制';
+  setTimeout(() => (btn.textContent = old), 1400);
+}
+
+/** 动态生成的按钮用不了 [data-copy] 的一次性绑定，所以单独给一个直接复制文本的入口。 */
+async function copyText(text, btn) {
+  const ok = await copyToClipboard(text);
+  if (!ok) {
+    toast('浏览器不允许自动复制，请手动选中');
+    return;
+  }
+  if (btn) {
     const old = btn.textContent;
     btn.textContent = '已复制';
     setTimeout(() => (btn.textContent = old), 1400);
-  } catch {
-    toast('浏览器不允许自动复制，请手动选中');
   }
 }
 
@@ -391,6 +719,8 @@ async function openEditor(handle) {
   $('#editor-title').textContent = handle ? '编辑成员' : '新建成员';
   $('#btn-archive').hidden = !handle;
   $('#btn-probe').hidden = !handle;
+  $('#btn-connect-from-editor').hidden = !handle;
+  $('#btn-purge').hidden = !handle;
   state.editing = handle;
   state.drafts = {};
 
@@ -409,12 +739,20 @@ async function openEditor(handle) {
   form.elements.display.value = detail?.display || '';
   form.elements.handle.value = detail?.handle || '';
   form.elements.handle.readOnly = Boolean(handle);
-  form.elements.persona.value = detail?.persona || '';
   form.elements.digest.value = detail?.digest || '';
 
-  const driver = detail?.driver || { type: 'llm' };
+  const driver = detail?.driver || { type: 'pull' };
   const radio = $$('input[name="driverType"]').find((r) => r.value === driver.type);
   if (radio) radio.checked = true;
+  // llm / cli 已从表单下架：老成员打开编辑时说明一下，保存会迁移成 pull
+  const deprecatedHint = $('#driver-deprecated-hint');
+  if (deprecatedHint) {
+    const gone = driver.type === 'llm' || driver.type === 'cli';
+    deprecatedHint.hidden = !gone;
+    deprecatedHint.textContent = gone
+      ? `该成员原本使用已下架的 ${driver.type} 驱动，保存后会改成 pull。`
+      : '';
+  }
   form.elements.cmd.value = driver.cmd || '';
   form.elements.args.value = Array.isArray(driver.args) ? driver.args.join(' ') : '';
   form.elements.cwd.value = driver.cwd || '';
@@ -439,6 +777,30 @@ async function openEditor(handle) {
   updateAvatarPreview();
   syncDriverFields();
 
+  // 特征名实时校验：格式不对立刻说明原因，不用等到点保存才报错
+  const handleInput = form.elements.handle;
+  const handleErr = $('#handle-error');
+  const checkHandle = () => {
+    if (handleInput.readOnly) {
+      handleErr.hidden = true;
+      handleInput.classList.remove('invalid');
+      return;
+    }
+    const v = handleInput.value.trim();
+    let msg = '';
+    if (v) {
+      if (/[A-Z]/.test(v)) msg = '不能有大写字母，请改成小写（例：dsh-pc）';
+      else if (!/^[a-z]/.test(v)) msg = '必须以小写字母开头';
+      else if (!/^[a-z][a-z0-9_-]*$/.test(v)) msg = '只能包含小写字母、数字、- 和 _';
+      else if (v.length > 32) msg = '最长 32 位';
+    }
+    handleErr.hidden = !msg;
+    handleErr.textContent = msg;
+    handleInput.classList.toggle('invalid', Boolean(msg));
+  };
+  handleInput.oninput = checkHandle;
+  checkHandle();
+
   $('#member-editor').hidden = false;
   setTimeout(() => form.elements.display.focus(), 60);
 }
@@ -446,6 +808,37 @@ async function openEditor(handle) {
 function closeEditor() {
   $('#member-editor').hidden = true;
   state.editing = null;
+}
+
+/**
+ * 彻底删除（不可恢复）。
+ *
+ * 和「移出并归档」的区别要讲清楚，否则用户会把两者搞混：
+ * 归档保留记录、可恢复；彻底删除会把成员从配置里抹掉，并吊销它的渠道令牌。
+ */
+async function confirmPurge(m) {
+  const ok = window.confirm(
+    `彻底删除成员「${m.display}」？\n\n` +
+      `· 从成员列表里移除，不可恢复\n` +
+      `· 吊销它的全部渠道令牌（接入的客户端会立刻 401）\n` +
+      `· 历史消息保留，但以后不再解析这个名字\n\n` +
+      `只想暂时停用的话，用「移出并归档」——那个可以恢复。`,
+  );
+  if (!ok) return;
+  try {
+    const res = await api.purgeMember(m.handle, state.etag);
+    toast(
+      res?.revokedChannels
+        ? `已彻底删除，吊销了 ${res.revokedChannels} 把渠道令牌`
+        : '已彻底删除',
+    );
+    if (state.editing === m.handle) closeEditor();
+    await reload();
+    onChanged();
+    refreshArchivedMembers();
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function renderChatChecks(selected) {
@@ -457,13 +850,16 @@ function renderChatChecks(selected) {
     box.innerHTML = '<p class="empty-note">还没有会话</p>';
     return;
   }
+  // 新建时默认勾上大厅：一个群都不属于的成员收不到任何消息，
+  // 而且从界面上完全看不出来——这是最容易被忽略的坑。
+  const isNew = !state.editing;
   for (const c of groups) {
     const label = document.createElement('label');
     label.className = 'check';
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.value = c.id;
-    cb.checked = selected.includes(c.id);
+    cb.checked = selected.includes(c.id) || (isNew && c.id === 'main');
     label.append(cb, document.createTextNode(c.name));
     box.append(label);
   }
@@ -603,13 +999,14 @@ async function save(e) {
   }
 
   const chats = $$('#chat-checks input:checked').map((cb) => cb.value);
+  // 不属于任何群的成员收不到任何消息，而且界面看不出原因——直接拦在保存这一步
+  if (!chats.length) return fail('至少要加入一个群：不属于任何群的成员收不到任何消息');
 
   const payload = {
     handle,
     display,
     avatar: state.drafts.avatar,
     avatarSalt: state.drafts.avatarSalt,
-    persona: form.elements.persona.value.trim(),
     driver,
     chats,
   };
@@ -675,6 +1072,7 @@ async function archive() {
     await reload();
     onChanged();
     closeEditor();
+    refreshArchivedMembers();
   } catch (ex) {
     toast(ex.message);
   }

@@ -125,11 +125,27 @@ export class Store {
     return row ? mapChat(row) : null;
   }
 
-  listChats() {
+  listChats({ includeArchived = false } = {}) {
+    const sql = includeArchived
+      ? 'SELECT * FROM chats ORDER BY archived_at DESC, updated_at DESC'
+      : 'SELECT * FROM chats WHERE archived_at IS NULL ORDER BY updated_at DESC';
+    const rows = this.db.prepare(sql).all();
+    return rows.map(mapChat);
+  }
+
+  /** 只取已归档的会话，给「已归档」列表用。 */
+  listArchivedChats() {
     const rows = this.db
-      .prepare('SELECT * FROM chats WHERE archived_at IS NULL ORDER BY updated_at DESC')
+      .prepare('SELECT * FROM chats WHERE archived_at IS NOT NULL ORDER BY archived_at DESC')
       .all();
     return rows.map(mapChat);
+  }
+
+  /** 把归档的会话放回来（成员归属要调用方自己补，这里只动会话本身）。 */
+  restoreChat(id) {
+    const now = Date.now();
+    this.db.prepare('UPDATE chats SET archived_at = NULL, updated_at = ? WHERE id = ?').run(now, id);
+    return this.getChat(id);
   }
 
   createChat(name) {
@@ -315,6 +331,19 @@ export class Store {
       .all(chatId, n + 1);
     const hasMore = rows.length > n;
     return { items: rows.slice(0, n).map(mapMessage).reverse(), hasMore };
+  }
+
+  /**
+   * 导出用：一口气拿某个会话的全部消息（按 seq 升序）。
+   *
+   * 不复用 listMessages 是因为它有 200 条上限且带分页语义；
+   * 导出要的是「一次拿全、按时间正序」，分页会引入循环和边界错误。
+   */
+  listAllMessages(chatId) {
+    const rows = this.db
+      .prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY seq ASC')
+      .all(chatId);
+    return rows.map(mapMessage);
   }
 
   // ── 群成员归属 ──────────────────────────────────────────────────────

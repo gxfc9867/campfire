@@ -118,7 +118,6 @@ export async function createMember(owner, overrides = {}) {
   const r = await owner.post('/api/members', {
     handle: 'echo',
     display: '回声',
-    persona: '你只复述对方的话',
     driver: { type: 'cli', cmd: 'echo', args: ['{{prompt}}'] },
     chats: ['main'],
     ...overrides,

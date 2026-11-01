@@ -44,7 +44,8 @@ export function buildChatMessages({
   allowMentions = true,
   members = null,
 }) {
-  const persona = member.persona?.trim() || `你是${member.display}。`;
+  // 围炉不维护人设（§6.8 管道归管道）：只给一句身份锚点，人格由 agent 侧自己带。
+  const persona = `你是${member.display}。`;
   const memory = digest?.trim();
   const nameOf = (sender) => (members ? displayNameOf({ members }, sender) : sender);
 

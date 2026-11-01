@@ -1,6 +1,8 @@
 import { readJson, sendJson } from '../http/util.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { SENDER } from '../constants.js';
+import { takeStop } from '../control.js';
+import { parseTargets } from '../targets.js';
 
 /**
  * Channel API v1。
@@ -10,7 +12,7 @@ import { SENDER } from '../constants.js';
  * 只记录客户端读到哪了（cursor），断线重连靠它续传。
  */
 export function registerChannelRoutes(router, ctx) {
-  const { cfg, store, members, hub } = ctx;
+  const { cfg, store, members, hub, presence } = ctx;
 
   const CAPABILITIES = {
     messageTypes: ['text', 'markdown'],
@@ -54,14 +56,52 @@ export function registerChannelRoutes(router, ctx) {
     return m;
   }
 
-  function mentionsOf(text, handle) {
-    const out = new Set();
-    for (const m of String(text).matchAll(/@([A-Za-z0-9_-]{1,32})/g)) out.add(m[1]);
-    return out.has(handle) ? [handle] : [];
+  /**
+   * 这条消息有没有 @ 到某个成员。
+   *
+   * 必须和 fanout 用同一套解析（parseTargets）：它支持 handle、显示名、别名，
+   * 而之前这里只拿正则扫 ASCII handle，结果成员写「@发财」时完全匹配不到，
+   * 投递被降级成 notify（只进收件箱、不唤醒）——表现就是「@ 了对方也不理」。
+   */
+  function mentionsOf(text, handle, chatId) {
+    try {
+      const candidates = (store.listMembersOf?.(chatId) || [])
+        .map((h) => members.get(h))
+        .filter(Boolean);
+      if (!candidates.length) return [];
+      const { targets } = parseTargets(String(text || ''), candidates);
+      return targets.includes(handle) ? [handle] : [];
+    } catch {
+      return [];
+    }
   }
 
   function serialize(msg, handle) {
     const senderMember = msg.sender === SENDER.user || msg.sender === SENDER.system ? null : members.get(msg.sender);
+    /**
+     * 引用摘要。
+     *
+     * 以前只回 replyTo（一个 id），客户端拿不到被引用的内容——表现在 agent 那边
+     * 就是「完全不知道你在引用哪句话」。所以这里把被引用消息的发送者和开头一段
+     * 原文一并带出去，让投递到会话里的文本能写出「[引用 某某] 原文…」。
+     */
+    let replyPreview = null;
+    if (msg.replyTo) {
+      try {
+        const q = store.getMessage?.(msg.replyTo);
+        if (q) {
+          const qMember =
+            q.sender === SENDER.user || q.sender === SENDER.system ? null : members.get(q.sender);
+          replyPreview = {
+            id: q.id,
+            sender: qMember?.display || (q.sender === SENDER.user ? '主人' : q.sender),
+            text: String(q.text || '').replace(/\s+/g, ' ').slice(0, 200),
+          };
+        }
+      } catch {
+        // 引用消息取不到不影响本条投递
+      }
+    }
     return {
       id: msg.id,
       chatId: msg.chatId,
@@ -75,12 +115,32 @@ export function registerChannelRoutes(router, ctx) {
       text: msg.text,
       attachments: [],
       replyTo: msg.replyTo || null,
-      mentions: mentionsOf(msg.text, handle),
+      replyPreview,
+      mentions: mentionsOf(msg.text, handle, msg.chatId),
       createdAt: msg.createdAt,
       editedAt: msg.meta?.edited ? msg.createdAt : null,
       deletedAt: msg.meta?.deleted ? msg.createdAt : null,
     };
   }
+
+  // ── 控制指令（停止）──────────────────────────────────────────────
+  //
+  // 成员在等回复期间拿不到普通消息，所以停止信号单独开一条短轮询：
+  // 取走即消费，没有就立刻返回空数组，客户端几百毫秒问一次也不心疼。
+  router.get(
+    '/v1/control',
+    (req, res, url, identity) => {
+      requireScope(identity, 'read');
+      const channel = channelOf(identity);
+      presence?.touch?.(channel.member);
+      const chatId = url.searchParams.get('chat') || (members.get(channel.member)?.chats || [])[0];
+      if (!chatId) throw badRequest('缺少 chat 参数');
+      assertMemberInChat(channel.member, chatId);
+      const actions = takeStop(chatId) ? [{ type: 'stop', chatId }] : [];
+      sendJson(res, 200, { actions });
+    },
+    { auth: 'channel' },
+  );
 
   // ── 拉取更新（游标流，长轮询）────────────────────────────────────
   router.get(
@@ -89,6 +149,9 @@ export function registerChannelRoutes(router, ctx) {
       requireScope(identity, 'read');
       const channel = channelOf(identity);
       const member = channel.member;
+      // 渠道接入的成员也要算「在线」：任何一次有效请求都说明它的进程活着。
+      // 少了这一步，pull 型成员会永远显示离线/从未活跃（旧的 /api/agent/* 就是这么做的）。
+      presence?.touch?.(member);
 
       const chatId = url.searchParams.get('chat') || (members.get(member)?.chats || [])[0];
       if (!chatId) throw badRequest('缺少 chat 参数');
@@ -135,8 +198,8 @@ export function registerChannelRoutes(router, ctx) {
         chatTitle: chat?.name || chatId,
         seq: msg.seq,
         message: serialize(msg, member),
-        wakeup: mentionsOf(msg.text, member).length > 0 ? 'reply' : 'notify',
-        replyRequired: mentionsOf(msg.text, member).length > 0,
+        wakeup: mentionsOf(msg.text, member, chatId).length > 0 ? 'reply' : 'notify',
+        replyRequired: mentionsOf(msg.text, member, chatId).length > 0,
       }));
 
       const nextCursor = items.length ? items[items.length - 1].seq : cursor;
@@ -157,6 +220,7 @@ export function registerChannelRoutes(router, ctx) {
       requireScope(identity, 'write');
       const channel = channelOf(identity);
       const member = channel.member;
+      presence?.touch?.(member);
 
       const body = await readJson(req, 256 * 1024);
       const chatId = String(body.chatId || '').trim();
@@ -183,6 +247,19 @@ export function registerChannelRoutes(router, ctx) {
       store.touchChat(chatId);
       hub.emit('change', { type: 'message', chatId });
 
+      /**
+       * 成员发言里 @ 了别人，也要走投递。
+       *
+       * 主人发消息走 /api/messages 会跑 fanout，而这条渠道路径以前只落库不投递，
+       * 所以 agent 之间互相 @ 永远叫不醒对方。异常不影响本条消息本身：消息已经
+       * 落库了，投递是附加动作。
+       */
+      try {
+        ctx.deliverToMembers?.({ chatId, messageId: msg.id, text, sender: member });
+      } catch (error) {
+        // 记录但不让发送失败
+      }
+
       sendJson(res, 201, { message: serialize(msg, member) });
     },
     { auth: 'channel' },
@@ -193,6 +270,7 @@ export function registerChannelRoutes(router, ctx) {
     '/v1/updates/ack',
     async (req, res, url, identity) => {
       const channel = channelOf(identity);
+      presence?.touch?.(channel.member);
       const body = await readJson(req, 64 * 1024);
       const chatId = String(body.chat || '').trim();
       const cursor = Number(body.cursor);
@@ -210,6 +288,7 @@ export function registerChannelRoutes(router, ctx) {
     '/v1/quota',
     (req, res, url, identity) => {
       const channel = channelOf(identity);
+      presence?.touch?.(channel.member);
       const pending = store.listJobs({ handle: channel.member, status: 'pending', limit: 1000 }).length;
       sendJson(res, 200, {
         pending,

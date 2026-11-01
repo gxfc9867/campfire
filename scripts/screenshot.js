@@ -128,9 +128,9 @@ async function main() {
 
   await req('POST', '/api/login', { password: 'preview-key' });
   const members = [
-    { handle: 'ruyi', display: '如意', avatar: 'preset:07', persona: '说话简洁，先给结论' },
-    { handle: 'laochen', display: '老陈', avatar: 'preset:13', persona: '负责后端，说话直' },
-    { handle: 'afei', display: '阿飞', avatar: 'preset:22', persona: '前端，爱较真' },
+    { handle: 'ruyi', display: '如意', avatar: 'preset:07' },
+    { handle: 'laochen', display: '老陈', avatar: 'preset:13' },
+    { handle: 'afei', display: '阿飞', avatar: 'preset:22' },
   ];
   for (const m of members) {
     await req('POST', '/api/members', {

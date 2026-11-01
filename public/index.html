@@ -70,6 +70,12 @@
 
         <nav class="chat-list" id="chat-list" aria-label="会话列表"></nav>
 
+        <!-- 已归档群聊：默认收起，点开才拉数据 -->
+        <details class="archive-section archive-section-side" id="archived-chats-section">
+          <summary>已归档 <span class="archive-count" id="archived-chats-count"></span></summary>
+          <div class="archive-list" id="archived-chats-list"></div>
+        </details>
+
         <footer class="sidebar-foot">
           <button class="ghost-btn" id="btn-members">
             <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -183,6 +189,12 @@
         </header>
         <div class="sheet-body">
           <div class="member-grid" id="member-grid"></div>
+
+          <!-- 已归档成员：默认收起，点开才拉数据 -->
+          <details class="archive-section" id="archived-members-section">
+            <summary>已归档成员 <span class="archive-count" id="archived-members-count"></span></summary>
+            <div class="archive-list" id="archived-members-list"></div>
+          </details>
         </div>
       </div>
     </div>
@@ -206,8 +218,10 @@
                   <input name="display" maxlength="40" placeholder="如意" />
                 </label>
                 <label class="field">
-                  <span class="field-label">特征名<em>唯一标识，创建后不改</em></span>
-                  <input name="handle" maxlength="32" placeholder="ruyi" pattern="[a-z][a-z0-9_-]{0,31}" />
+                  <span class="field-label">特征名<em>唯一标识，创建后不能改</em></span>
+                  <input name="handle" maxlength="32" placeholder="dsh-pc" pattern="[a-z][a-z0-9_-]{0,31}" autocomplete="off" spellcheck="false" />
+                  <p class="field-hint">只能小写字母开头，可含小写字母、数字、<code>-</code> 和 <code>_</code>，最长 32 位。例：<code>dsh-pc</code>、<code>facai</code>、<code>gongxi</code></p>
+                  <p class="field-error" id="handle-error" hidden></p>
                 </label>
               </div>
             </div>
@@ -219,11 +233,6 @@
             </div>
 
             <label class="field">
-              <span class="field-label">人设<em>它是谁、什么口吻、负责什么</em></span>
-              <textarea name="persona" rows="3" placeholder="你是如意，卿哥的助手。说话简洁，先给结论。"></textarea>
-            </label>
-
-            <label class="field">
               <span class="field-label">记忆摘要<em>它记得的事，可随时改</em></span>
               <textarea name="digest" rows="4" placeholder="留空即可，之后成员会在对话中自己更新。"></textarea>
             </label>
@@ -232,22 +241,15 @@
               <span class="field-label">驱动方式<em>决定它怎么收到消息</em></span>
               <div class="radio-row" id="driver-row">
                 <label class="radio">
-                  <input type="radio" name="driverType" value="llm" checked />
-                  <span><b>大模型直连</b><em>填个密钥就能说话，不用装任何东西</em></span>
-                </label>
-                <label class="radio">
-                  <input type="radio" name="driverType" value="pull" />
-                  <span><b>pull</b><em>成员自己来拉，不用唤醒</em></span>
-                </label>
-                <label class="radio">
-                  <input type="radio" name="driverType" value="cli" />
-                  <span><b>cli</b><em>由宿主机 sidecar 起进程</em></span>
+                  <input type="radio" name="driverType" value="pull" checked />
+                  <span><b>pull</b><em>成员自己来拉。DSH 插件、WorkBuddy 桥都走这条</em></span>
                 </label>
                 <label class="radio">
                   <input type="radio" name="driverType" value="webhook" />
-                  <span><b>webhook</b><em>桥推送到成员地址</em></span>
+                  <span><b>webhook</b><em>围炉把消息 POST 到你自己的服务</em></span>
                 </label>
               </div>
+              <p class="field-hint" id="driver-deprecated-hint" hidden></p>
             </div>
 
             <div class="field" id="llm-fields" hidden>
@@ -316,7 +318,9 @@
 
             <div class="editor-foot">
               <button type="button" class="text-btn" id="btn-probe" hidden>测试连接</button>
+              <button type="button" class="text-btn" id="btn-connect-from-editor" hidden>接入设置</button>
               <button type="button" class="text-btn danger" id="btn-archive" hidden>移出并归档</button>
+              <button type="button" class="text-btn danger" id="btn-purge" hidden>彻底删除</button>
               <span class="spacer"></span>
               <button type="button" class="text-btn" id="btn-cancel-edit">取消</button>
               <button type="submit" class="primary-btn" id="btn-save-member">保存</button>
@@ -344,6 +348,42 @@
           <p class="connect-lead" id="connect-lead">
             成员已经建好了。把它接到<b>装了 agent 命令的那台机器</b>上，三步就通。
           </p>
+
+          <!-- pull 驱动：DSH 插件 / WorkBuddy 桥，走渠道令牌 + /v1 接口 -->
+          <div id="connect-dsh" hidden>
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">1</span>拿一把渠道令牌</div>
+              <p class="step-note">
+                插件靠它认身份（以 <code>cf_</code> 开头）。<b>明文只在生成时显示一次</b>，丢了就重新生成一把。
+              </p>
+              <div id="connect-channel-area"></div>
+            </div>
+
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">2</span>在 DSH 里填三项</div>
+              <p class="step-note">
+                打开 <b>DSH → 设置 → 围炉渠道</b>，把下面三项照抄进去，然后点保存。
+              </p>
+              <p class="field-hint" style="margin: 0 0 8px">
+                如果 DSH 跑在这台 NAS 的 Docker 里，地址要写 <code>http://127.0.0.1:8099</code>——
+                容器里访问不到局域网的 IP。
+              </p>
+              <div class="code-box">
+                <div class="code-head">
+                  <span>要填的三项</span>
+                  <button type="button" class="text-btn" data-copy="connect-dsh-params">复制</button>
+                </div>
+                <pre id="connect-dsh-params"></pre>
+              </div>
+            </div>
+
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">3</span>重启 DSH，回群里 @ 它</div>
+              <p class="step-note">
+                重启后插件会自己连上来（上面的状态点会变绿）。然后在群里 <code>@特征名</code> 发一句话即可。
+              </p>
+            </div>
+          </div>
 
           <div id="connect-manual">
             <div class="connect-step">

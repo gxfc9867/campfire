@@ -68,7 +68,6 @@ export function registerAdminRoutes(router, ctx) {
             display: m.display,
             avatar: m.avatar,
             avatarSalt: m.avatarSalt,
-            persona: m.persona.slice(0, 200),
             driverType: m.driver.type,
             chats: m.chats,
             presence: p,
@@ -95,14 +94,18 @@ export function registerAdminRoutes(router, ctx) {
 
   router.get(
     '/api/members',
-    (req, res) => {
-      const includeArchived = false;
-      const list = members.list({ includeArchived }).map((m) => ({
-        ...publicView(m),
-        presence: presence.snapshot(m.handle, m.driver.type),
-        memory: memory.meta(m.handle),
-      }));
-      sendJson(res, 200, { members: list, etag: members.etag() });
+    (req, res, url) => {
+      // ?archived=1 只取已归档的（给「已归档」列表用）；不带参数仍只给活跃成员
+      const archivedOnly = url.searchParams.get('archived') === '1';
+      const list = members
+        .list({ includeArchived: archivedOnly })
+        .filter((m) => (archivedOnly ? Boolean(m.archivedAt) : !m.archivedAt))
+        .map((m) => ({
+          ...publicView(m),
+          presence: presence.snapshot(m.handle, m.driver.type),
+          memory: memory.meta(m.handle),
+        }));
+      sendJson(res, 200, { members: list, etag: members.etag(), archived: archivedOnly });
     },
     { auth: 'owner' },
   );
@@ -182,6 +185,29 @@ export function registerAdminRoutes(router, ctx) {
       store.setMemberChats(m.handle, m.chats);
       hub.emit('change', { type: 'members' });
       sendJson(res, 200, { member: publicView(m), etag: members.etag() });
+    },
+    { auth: 'owner' },
+  );
+
+  /**
+   * 彻底删除：从 members.json 里抹掉，并吊销该成员名下所有渠道令牌。
+   * 历史消息保留（sender 存的是 handle 字符串，没有外键）。
+   */
+  router.delete(
+    /^\/api\/members\/([a-z][a-z0-9_-]{0,31})\/purge$/,
+    (req, res, url, identity, handle) => {
+      const etag = req.headers['if-match'] || '';
+      members.purge(handle, etag);
+      store.setMemberChats(handle, []);
+      let revoked = 0;
+      try {
+        revoked = ctx.channels?.revokeAllOf?.(handle) ?? 0;
+      } catch (e) {
+        log.warn(`吊销 ${handle} 的渠道令牌失败：${e.message}`);
+      }
+      hub.emit('change', { type: 'members' });
+      log.info(`彻底删除成员 ${handle}，吊销渠道令牌 ${revoked} 条`);
+      sendJson(res, 200, { ok: true, revokedChannels: revoked, etag: members.etag() });
     },
     { auth: 'owner' },
   );

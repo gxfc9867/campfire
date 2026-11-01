@@ -44,11 +44,14 @@ export const api = {
   login: (password) => request('/api/login', { method: 'POST', body: { password } }),
   logout: () => request('/api/logout', { method: 'POST' }),
 
-  chats: () => request('/api/chats'),
+  chats: (opts) => request(`/api/chats${opts?.archived ? '?archived=1' : ''}`),
   createChat: (name) => request('/api/chats', { method: 'POST', body: { name } }),
   createDm: (handle) => request('/api/chats/dm', { method: 'POST', body: { handle } }),
   renameChat: (id, name) => request(`/api/chats/${id}`, { method: 'PATCH', body: { name } }),
   deleteChat: (id) => request(`/api/chats/${id}`, { method: 'DELETE' }),
+  /** 归档：只收进归档列表，成员归属不动，可恢复。 */
+  archiveChat: (id) => request(`/api/chats/${id}/archive`, { method: 'POST' }),
+  restoreChat: (id) => request(`/api/chats/${id}/restore`, { method: 'POST' }),
   markRead: (id, seq) => request(`/api/chats/${id}/read`, { method: 'POST', body: { seq } }),
 
   messages: (chatId, params = {}) => {
@@ -59,19 +62,36 @@ export const api = {
     request('/api/messages', { method: 'POST', body: { chat: chatId, text, clientId, quote } }),
   editMessage: (id, text) => request(`/api/messages/${id}`, { method: 'PATCH', body: { text } }),
   deleteMessage: (id) => request(`/api/messages/${id}`, { method: 'DELETE' }),
+  /** 让正在跑这一轮的成员中断生成（对标 DSH 会话里的「停止」）。 */
+  stopChat: (chat) => request('/api/stop', { method: 'POST', body: { chat } }),
+  /** 会话导出地址：用 <a download> 直接打开，靠 cookie 鉴权。 */
+  exportChatUrl: (id, format = 'md') =>
+    `/api/chats/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
 
   status: (chatId) => request(`/api/status${chatId ? `?chat=${encodeURIComponent(chatId)}` : ''}`),
   jobs: (chatId) => request(`/api/jobs?chat=${encodeURIComponent(chatId)}`),
   retryJob: (id) => request(`/api/jobs/${id}/retry`, { method: 'POST' }),
   cancelJob: (id) => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
 
-  members: () => request('/api/members'),
+  members: (opts) => request(`/api/members${opts?.archived ? '?archived=1' : ''}`),
   member: (handle) => request(`/api/members/${handle}?reveal=1`),
   createMember: (payload) => request('/api/members', { method: 'POST', body: payload }),
   updateMember: (handle, payload, etag) =>
     request(`/api/members/${handle}`, { method: 'PATCH', body: { ...payload, etag } }),
   archiveMember: (handle, etag) =>
     request(`/api/members/${handle}`, { method: 'DELETE', headers: { 'If-Match': etag } }),
+  /** 从归档里恢复成员。 */
+  restoreMember: (handle) => request(`/api/members/${handle}/restore`, { method: 'POST' }),
+  /** 彻底删除：从配置里移除，并吊销该成员全部渠道令牌。历史消息保留。 */
+  purgeMember: (handle, etag) =>
+    request(`/api/members/${handle}/purge`, { method: 'DELETE', headers: { 'If-Match': etag } }),
+
+  // 渠道令牌（v1 接入面：DSH 插件、WorkBuddy 桥都靠它）
+  channels: (member) =>
+    request(`/api/admin/channels${member ? `?member=${encodeURIComponent(member)}` : ''}`),
+  createChannel: (member, name) =>
+    request('/api/admin/channels', { method: 'POST', body: { member, name } }),
+  revokeChannel: (id) => request(`/api/admin/channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   rotateKey: (handle) => request(`/api/members/${handle}/rotate`, { method: 'POST' }),
   probeMember: (handle) => request(`/api/members/${handle}/probe`, { method: 'POST' }),
   saveMemory: (handle, digest) =>

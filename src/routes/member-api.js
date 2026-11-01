@@ -177,7 +177,6 @@ export function registerMemberRoutes(router, ctx) {
       sendJson(res, 200, {
         handle: m.handle,
         display: m.display,
-        persona: m.persona,
         digest: digest.digest,
         digestUpdatedAt: digest.updatedAt,
         chats,

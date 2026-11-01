@@ -82,7 +82,6 @@ async function main() {
     const created = await req('POST', '/api/members', {
       handle: 'bot',
       display: '假成员',
-      persona: '你是一个测试用的成员。',
       driver: {
         type: 'cli',
         cmd: process.execPath,

@@ -102,8 +102,8 @@ describe('大模型驱动的配置校验', () => {
 });
 
 describe('提示词拼装', () => {
-  test('人设、记忆、规则进 system；自己的话是 assistant，别人的话带名字', () => {
-    const member = { handle: 'echo', display: '回声', persona: '你说话很短' };
+  test('记忆、规则进 system；自己的话是 assistant，别人的话带名字', () => {
+    const member = { handle: 'echo', display: '回声' };
     const members = {
       get: (h) => (h === 'echo' ? member : h === 'beacon' ? { handle: 'beacon', display: '灯塔' } : null),
     };
@@ -124,7 +124,8 @@ describe('提示词拼装', () => {
     });
 
     assert.equal(out[0].role, 'system');
-    assert.match(out[0].content, /你说话很短/);
+    // 围炉不再维护人设，只给一句身份锚点
+    assert.match(out[0].content, /你是回声/);
     assert.match(out[0].content, /上次聊到 NAS/);
     assert.match(out[0].content, /大厅/);
     assert.match(out[0].content, /不要 @ 任何人/);
@@ -206,7 +207,6 @@ describe('llm 成员在群里真的会回话', () => {
       const created = await owner.post('/api/members', {
         handle: 'thinker',
         display: '思考者',
-        persona: '你是群里最爱较真的那个人',
         driver: { type: 'llm', baseUrl: mock.url, model: 'mock-model', apiKey: 'good-key' },
         chats: ['main'],
       });

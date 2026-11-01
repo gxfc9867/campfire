@@ -57,4 +57,19 @@ export class Channels {
     if (!ch) throw notFound('渠道不存在');
     return this.store.revokeChannel(id);
   }
+
+  /** 吊销某成员名下所有仍然有效的渠道令牌，返回吊销条数。彻底删除成员时调用。 */
+  revokeAllOf(member) {
+    let revoked = 0;
+    for (const ch of this.list(member) || []) {
+      if (ch.revoked_at) continue;
+      try {
+        this.store.revokeChannel(ch.id);
+        revoked += 1;
+      } catch {
+        // 单条吊销失败不阻断删除流程，剩下的留给人工处理
+      }
+    }
+    return revoked;
+  }
 }

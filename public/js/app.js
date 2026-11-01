@@ -171,6 +171,12 @@ function bindTheme() {
 
 /** 顶栏、右侧栏、标签页这些「壳」上的交互，与业务数据无关。 */
 function bindChrome() {
+  // 已归档会话：展开时才去拉数据，收起状态下不发请求
+  const archivedSection = document.getElementById('archived-chats-section');
+  archivedSection?.addEventListener('toggle', () => {
+    if (archivedSection.open) refreshArchivedChats();
+  });
+
   // 右侧栏开合
   const toggleAside = () => {
     const closed = $('#app').classList.toggle('aside-closed');
@@ -256,13 +262,65 @@ async function openChatMenu(chat, x, y) {
   const isDm = chat.kind === 'dm';
   const options =
     chat.id === 'main'
-      ? ['改备注']
-      : [isDm ? '给单聊改备注' : '给群改备注', isDm ? '删除单聊' : '解散群聊'];
+      ? ['改备注', '导出会话']
+      : [
+          isDm ? '给单聊改备注' : '给群改备注',
+          '导出会话',
+          isDm ? '归档单聊' : '归档群聊',
+          isDm ? '删除单聊' : '解散群聊',
+        ];
   const act = await menuChoice(x, y, options);
   if (!act) return;
   if (act.includes('改备注')) return renameChatFlow(chat);
+  if (act === '导出会话') return exportChatFlow(chat, x, y);
+  if (act === '归档群聊' || act === '归档单聊') return archiveChat(chat);
   if (act === '解散群聊') return dissolveChat(chat);
   if (act === '删除单聊') return removeDm(chat);
+}
+
+/**
+ * 导出会话：先选格式再下载。
+ *
+ * Markdown 是默认——人和 agent 都能直接读；JSON 给需要程序处理的场景。
+ * 用隐藏 <a download> 触发，比 window.open 干净：不会多开标签页，也不吃弹窗拦截。
+ */
+async function exportChatFlow(chat, x, y) {
+  const choice = await menuChoice(x, y, [
+    'Markdown（推荐：人和 agent 都能读）',
+    'JSON（给程序处理用）',
+  ]);
+  if (!choice) return;
+  const format = choice.startsWith('JSON') ? 'json' : 'md';
+  const a = document.createElement('a');
+  a.href = api.exportChatUrl(chat.id, format);
+  a.download = '';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  toast(`正在导出「${chat.name}」为 ${format.toUpperCase()}`);
+}
+
+/**
+ * 归档会话：只是从列表收进「已归档」，成员归属不动，随时能恢复。
+ * 和「解散」的区别在于解散会顺手把成员从群里移出。
+ */
+async function archiveChat(chat) {
+  const ok = confirm(
+    `把「${chat.name}」收进归档？\n\n` +
+      `· 从会话列表里消失，历史消息保留\n` +
+      `· 成员归属不动，随时可以从「已归档」里恢复\n\n` +
+      `想彻底不要了，用「${chat.kind === 'dm' ? '删除单聊' : '解散群聊'}」。`,
+  );
+  if (!ok) return;
+  try {
+    await api.archiveChat(chat.id);
+    if (state.chatId === chat.id) await selectChat('main');
+    await loadChats();
+    toast(`已归档「${chat.name}」`);
+    refreshArchivedChats();
+  } catch (ex) {
+    toast(ex.message);
+  }
 }
 
 async function renameChatFlow(chat) {
@@ -315,6 +373,58 @@ async function removeDm(chat) {
     await loadChats();
   } catch (ex) {
     toast(ex.message);
+  }
+}
+
+/** 已归档群聊：默认收起，展开时才拉数据。 */
+async function refreshArchivedChats() {
+  const section = document.getElementById('archived-chats-section');
+  const list = document.getElementById('archived-chats-list');
+  const countEl = document.getElementById('archived-chats-count');
+  if (!section || !list) return;
+
+  try {
+    const res = await api.chats({ archived: true });
+    const chats = res.chats || [];
+    if (countEl) countEl.textContent = chats.length ? `(${chats.length})` : '';
+    list.textContent = '';
+    if (!chats.length) {
+      const p = document.createElement('p');
+      p.className = 'archive-empty';
+      p.textContent = '没有归档的会话';
+      list.append(p);
+      return;
+    }
+    for (const c of chats) {
+      const row = document.createElement('div');
+      row.className = 'archive-row';
+      const name = document.createElement('span');
+      name.className = 'archive-row-name';
+      name.textContent = c.name || c.id;
+      name.title = `${c.name || c.id}（${c.count || 0} 条消息）`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'text-btn';
+      btn.textContent = '恢复';
+      btn.addEventListener('click', async () => {
+        try {
+          await api.restoreChat(c.id);
+          toast(`已恢复「${c.name || c.id}」`);
+          await loadChats();
+          refreshArchivedChats();
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+      row.append(name, btn);
+      list.append(row);
+    }
+  } catch (e) {
+    list.textContent = '';
+    const p = document.createElement('p');
+    p.className = 'archive-empty';
+    p.textContent = `读取失败：${e.message}`;
+    list.append(p);
   }
 }
 
@@ -713,11 +823,7 @@ function buildDmPinned(chat) {
     `<span class="pinned-faces">${m ? `<img src="${esc(avatarUrl(m, BASE))}" alt="" />` : ''}</span>` +
     (label ? `<span class="badge ${label.cls}">${label.text}</span>` : '') +
     `</div>` +
-    `<div class="pinned-text">${
-      m?.persona
-        ? esc(m.persona.slice(0, 140))
-        : '这是你和它的单聊。消息直接发给它，不用 <code>@</code>；它说什么也只有你能看到。'
-    }</div>`;
+    `<div class="pinned-text">这是你和它的单聊。消息直接发给它，不用 <code>@</code>；它说什么也只有你能看到。</div>`;
   return div;
 }
 
@@ -732,6 +838,73 @@ function appendMessage(m) {
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   box.append(buildMessage(m));
   if (nearBottom) scrollToBottom();
+}
+
+/** 5 分钟内的消息才算「可能还在处理」，超过就没必要给停止入口。 */
+function isRecent(m, windowMs = 5 * 60_000) {
+  return Date.now() - Number(m.createdAt || 0) < windowMs;
+}
+
+/**
+ * 复制文本，带降级。
+ *
+ * 安全上下文（https / localhost）才允许 navigator.clipboard；围炉通常跑在
+ * http://局域网IP，这时只能退回 execCommand。元素用「移出屏幕」而不是
+ * opacity:0 —— 后者在部分浏览器里选不中文本，复制出来是空串。
+ */
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 落到下面的兜底
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 投递状态小字：只对自己发的消息算。
+ *
+ * 规则很朴素——正文里 @ 了谁，就看有没有「那个成员 + replyTo 指向本条」的回复：
+ * 有就是已回复（带时间），没有就是等待中。会话被删/插件挂了都会表现为一直等待中，
+ * 至少比完全没反馈强，用户能看出「这条没送到」。
+ */
+function buildDeliveryStatus(m) {
+  if (m.sender !== 'user' || !state.members?.length) return '';
+  const targets = [];
+  for (const mm of state.members) {
+    if (!mm.handle || mm.handle === 'user') continue;
+    const byHandle = new RegExp(`@${mm.handle}(?![\\w-])`, 'i');
+    const byName = mm.display ? new RegExp(`@${mm.display}(?![\\u4e00-\\u9fa5\\w])`) : null;
+    if (byHandle.test(m.text) || (byName && byName.test(m.text))) targets.push(mm);
+  }
+  if (!targets.length) return '';
+
+  const parts = targets.map((mm) => {
+    const reply = state.messages.find((x) => x.sender === mm.handle && x.replyTo === m.id);
+    return reply
+      ? `${esc(mm.display)} 已回复 · ${fmtTime(reply.createdAt)}`
+      : `${esc(mm.display)} 等待中`;
+  });
+  return `<div class="msg-delivery">${parts.join('　·　')}</div>`;
 }
 
 function buildMessage(m) {
@@ -775,7 +948,8 @@ function buildMessage(m) {
       : '') +
     (m.meta?.deleted
       ? '<div class="msg-text msg-deleted">消息已删除</div>'
-      : `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`);
+      : `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`) +
+    buildDeliveryStatus(m);
 
   if (quoted) {
     block.querySelector('.msg-quote')?.addEventListener('click', () => {
@@ -806,16 +980,18 @@ function buildMessage(m) {
 
   ops.append(opButton('引用', () => startQuote(m)));
 
-  if (isMe && !m.meta?.deleted) {
+  /**
+   * 停止：只挂在自己发的那条消息上，而且只在它还可能「没被处理完」时出现
+   * （最近的几条）。点了就是让正在跑这一轮的成员中断生成。
+   */
+  if (isMe && !m.meta?.deleted && isRecent(m)) {
     ops.append(
-      opButton('编辑', async () => {
-        const next = prompt('修改这条消息', m.text);
-        if (next === null || !next.trim() || next === m.text) return;
+      opButton('停止', async () => {
         try {
-          await api.editMessage(m.id, next.trim());
-          loadMessages();
+          await api.stopChat(m.chatId || state.chatId);
+          toast('已发出停止指令');
         } catch (ex) {
-          toast(ex instanceof ApiError ? ex.message : '修改失败');
+          toast(ex instanceof ApiError ? ex.message : '停止失败');
         }
       }),
     );
@@ -838,12 +1014,10 @@ function buildMessage(m) {
   copy.className = 'msg-op';
   copy.textContent = '复制';
   copy.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(m.text);
-      toast('已复制');
-    } catch {
-      toast('复制失败，浏览器不允许');
-    }
+    // 围炉多半跑在 http://局域网IP 下，不是安全上下文，clipboard API 直接不可用；
+    // 之前没有兜底，点了只会弹「复制失败」，剪贴板里什么都没有。
+    const ok = await copyText(m.text);
+    toast(ok ? '已复制' : '复制失败，浏览器不允许');
   });
   ops.append(copy);
   wrap.append(block, ops);
@@ -966,7 +1140,9 @@ function updateMentionMenu() {
   if (currentChat()?.kind === 'dm') return closeMentionMenu();
   const input = $('#input');
   const before = input.value.slice(0, input.selectionStart);
-  const m = /(?:^|\s)@([^\s@]{0,20})$/.exec(before);
+  // 只要光标前是「@ + 若干非空白字符」就弹补全。
+  // 早先要求 @ 前面必须是行首或空白，导致中文后面直接打 @ 时补不出来。
+  const m = /@([^\s@]{0,20})$/.exec(before);
   if (!m) return closeMentionMenu();
 
   const q = m[1].toLowerCase();
@@ -1014,10 +1190,11 @@ function pickMention(member) {
   const input = $('#input');
   const value = input.value;
   const pos = input.selectionStart;
-  const before = value.slice(0, pos).replace(/(?:^|\s)@([^\s@]{0,20})$/, (full) => {
-    const lead = full.startsWith('@') ? '' : full[0];
-    return `${lead}@${member.handle} `;
-  });
+  // 必须和 updateMentionMenu 用同一条正则：那边放宽到「任意位置的 @」后，
+  // 这里如果还要求 @ 前面是行首/空白，就会出现「菜单弹出来了但选完没插入」。
+  const before = value
+    .slice(0, pos)
+    .replace(/@([^\s@]{0,20})$/, () => `@${member.handle} `);
   input.value = before + value.slice(pos);
   input.selectionStart = input.selectionEnd = before.length;
   closeMentionMenu();
