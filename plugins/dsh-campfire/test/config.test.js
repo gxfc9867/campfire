@@ -22,7 +22,7 @@ test('无配置时给出安全默认值：不拉流、不猜地址', async () =>
   assert.equal(config.configFile, path.join(dir, 'campfire', 'config.json'));
 });
 
-test('优先级：行内 config > 环境变量 > 配置文件 > 默认值', async () => {
+test('优先级：配置文件 > 环境变量 > 行内 config > 默认值', async () => {
   const dir = await tempDir();
   const configFile = path.join(dir, 'cfg.json');
   await fs.mkdir(path.dirname(configFile), { recursive: true });
@@ -43,8 +43,10 @@ test('优先级：行内 config > 环境变量 > 配置文件 > 默认值', asyn
     },
   );
 
-  assert.equal(config.baseUrl, 'http://from-env:2');
-  assert.equal(config.memberHandle, 'row-member');
+  // 配置文件最高：DSH 会按插件导出的 Config schema 生成一整套默认值当行内 config
+  // 传进来（baseUrl:'' 等），若让行内 config 最高，用户在界面里填的值会被盖掉。
+  assert.equal(config.baseUrl, 'http://from-file:1');
+  assert.equal(config.memberHandle, 'file-member');
   assert.deepEqual(config.chatIds, ['file-chat']);
 });
 
@@ -62,7 +64,7 @@ test('配置文件解析失败只告警，不阻断启动', async () => {
   assert.equal(warnings[0][0], 'warn');
 });
 
-test('token 解析顺序：行内 > tokenEnv > tokenFile', async () => {
+test('token 解析：显式 token（配置文件/环境变量）优先于 tokenFile', async () => {
   const dir = await tempDir();
   const secretFile = path.join(dir, 'token.txt');
   await fs.writeFile(secretFile, '  from-file-token\n');
@@ -74,7 +76,8 @@ test('token 解析顺序：行内 > tokenEnv > tokenFile', async () => {
   assert.equal(fromEnv.token, 'from-env');
 
   const fromRow = await resolveConfig({ tokenFile: secretFile, token: 'from-row' }, { env: { DSH_HOME: dir, CAMPFIRE_TOKEN: 'from-env' } });
-  assert.equal(fromRow.token, 'from-row');
+  // 环境变量高于行内 config（行内那份多半是 schema 默认值，不可信）
+  assert.equal(fromRow.token, 'from-env');
 });
 
 test('chatIds 支持逗号分隔字符串并去空', async () => {

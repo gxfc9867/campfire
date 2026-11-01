@@ -9,10 +9,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
+
+/** 去重表最多留这么多条：够覆盖断线重连的窗口，又不会让 state.json 无限长。 */
+const PROCESSED_LIMIT = 300;
 
 function emptyState() {
-  return { version: STATE_VERSION, bindings: {}, cursors: {} };
+  return { version: STATE_VERSION, bindings: {}, cursors: {}, processed: {} };
 }
 
 function normalizeState(raw) {
@@ -35,6 +38,13 @@ function normalizeState(raw) {
     for (const [chat, seq] of Object.entries(raw.cursors)) {
       const value = Number(seq);
       if (Number.isFinite(value) && value >= 0) base.cursors[chat] = value;
+    }
+  }
+  // 已处理的 updateId：跨重启去重，避免「回复成功但 ack 失败」时重放同一条
+  if (raw.processed && typeof raw.processed === 'object') {
+    for (const [id, at] of Object.entries(raw.processed)) {
+      const value = Number(at);
+      if (typeof id === 'string' && id && Number.isFinite(value)) base.processed[id] = value;
     }
   }
   return base;
@@ -122,6 +132,23 @@ export function createStateStore({ filePath, log = () => {} } = {}) {
       if (!Number.isFinite(value) || value < 0) return;
       if ((state.cursors[chatId] ?? 0) === value) return;
       state.cursors[chatId] = value;
+      await persist();
+    },
+
+    /** 这条 update 之前处理过吗（跨重启有效）。 */
+    hasProcessed: (updateId) => Boolean(state.processed?.[updateId]),
+
+    /** 记下已处理的 updateId，超过上限时丢最旧的。 */
+    async markProcessed(updateId) {
+      if (!updateId) return;
+      state.processed[updateId] = Date.now();
+      const keys = Object.keys(state.processed);
+      if (keys.length > PROCESSED_LIMIT) {
+        keys
+          .sort((a, b) => state.processed[a] - state.processed[b])
+          .slice(0, keys.length - PROCESSED_LIMIT)
+          .forEach((k) => delete state.processed[k]);
+      }
       await persist();
     },
   };

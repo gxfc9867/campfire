@@ -236,7 +236,7 @@ test('重复投递同一 updateId 只处理一次', async () => {
   }
 });
 
-test('单个成员处理失败不阻塞群：游标照推、失败计数', async () => {
+test('单个成员处理失败不阻塞群：游标照推、失败计数、回写失败说明', async () => {
   const ctx = await setup({ hostOptions: { askThrows: true } });
   try {
     ctx.mock.injectMessage({ text: '@facai 你好', mentions: ['facai'] });
@@ -244,23 +244,34 @@ test('单个成员处理失败不阻塞群：游标照推、失败计数', async
     assert.equal(count, 1);
     assert.equal(ctx.bridge.stats.failures, 1);
     assert.equal(ctx.store.getCursor('main'), 1);
-    assert.equal(ctx.mock.outbox().messages.length, 0);
+    // 失败必须可见：以前是静默吞掉，用户只看到「一直没回复」
+    const outbox = ctx.mock.outbox().messages;
+    assert.equal(outbox.length, 1);
+    assert.match(outbox[0].text, /处理失败/);
   } finally {
     await ctx.close();
   }
 });
 
-test('绑定的会话盘上没有记录 → 同 id 重建，绑定不漂移', async () => {
+test('绑定的会话没了 → 不偷偷重建，改为新建并回写说明', async () => {
   const ctx = await setup();
   try {
     await ctx.store.setBinding('*', { sessionId: 'campfire-main-gone', chatId: 'main' });
     ctx.mock.injectMessage({ text: '@facai 还在吗', mentions: ['facai'] });
     await ctx.bridge.pollChat('main');
 
+    // 先尝试打开原会话
     assert.deepEqual(ctx.host.calls.open, ['campfire-main-gone']);
-    assert.equal(ctx.host.calls.create.length, 1);
-    assert.equal(ctx.host.calls.create[0].sessionId, 'campfire-main-gone');
-    assert.equal(ctx.store.getBinding('*').sessionId, 'campfire-main-gone');
+    // 但不再用同一个 id 重建——那等于把用户的删除动作悄悄撤销了
+    const binding = ctx.store.getBinding('*');
+    assert.notEqual(binding.sessionId, 'campfire-main-gone');
+    assert.equal(ctx.host.calls.create.filter((c) => c.sessionId === 'campfire-main-gone').length, 0);
+    // 群里要能看到「会话没了」的说明
+    const outbox = ctx.mock.outbox().messages;
+    assert.ok(
+      outbox.some((m) => /已经不在了/.test(String(m.text))),
+      '应回写「会话已不存在」的说明',
+    );
   } finally {
     await ctx.close();
   }
@@ -296,12 +307,16 @@ test('per-chat 模式下每个群各自一个绑定键', async () => {
   }
 });
 
-test('模型没产出文本时只 ack 不发空帖', async () => {
+test('模型没产出文本时不发空帖，但要回一句说明（不能静默）', async () => {
   const ctx = await setup({ hostOptions: { reply: '   ' } });
   try {
     ctx.mock.injectMessage({ text: '@facai 在吗', mentions: ['facai'] });
     await ctx.bridge.pollChat('main');
-    assert.equal(ctx.mock.outbox().messages.length, 0);
+    // 不能是空回复
+    const outbox = ctx.mock.outbox().messages;
+    assert.equal(outbox.length, 1);
+    assert.match(String(outbox[0].text), /没有产出内容/);
+    assert.ok(String(outbox[0].text).trim().length > 0);
     assert.equal(ctx.store.getCursor('main'), 1);
   } finally {
     await ctx.close();

@@ -19,6 +19,8 @@ export class CampfireError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** 控制指令轮询用短超时：它本来就是「问一句有没有事」，不该占着连接。 */
+const SHORT_TIMEOUT_MS = 5_000;
 /** 长轮询额外宽限：服务端 wait 秒数之外再给网络留这么久。 */
 const LONG_POLL_GRACE_MS = 15_000;
 
@@ -183,6 +185,19 @@ export function createCampfireClient(options = {}) {
 
     /** `GET /v1/quota` —— 背压/丢弃观测。 */
     quota: (opts) => request('GET', '/v1/quota', opts),
+
+    /**
+     * `GET /v1/control` —— 控制指令（目前只有 stop）。
+     *
+     * 单独一条短轮询：等回复期间长轮询是阻塞的，普通消息进不来，
+     * 只有这条能让「停止」插队。取走即消费，没指令时立刻返回空数组。
+     */
+    control: ({ chat, signal, timeoutMs } = {}) =>
+      request('GET', '/v1/control', {
+        query: { chat },
+        signal,
+        timeoutMs: timeoutMs ?? SHORT_TIMEOUT_MS,
+      }),
 
     /** 停掉所有在途请求（插件卸载时调用）。 */
     close(reason = 'plugin unload') {

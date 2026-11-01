@@ -35,8 +35,11 @@ function attachmentLines(attachments) {
 }
 
 /**
- * 把一条围炉消息渲染成注入会话的文本：`来源标记 + 正文 + 附件行`。
- * 超长正文会截断并明确标注，避免把上下文一次打满。
+ * 把一条围炉消息渲染成注入会话的文本：
+ * `引用行（可选）+ 来源标记 + 正文 + 附件行`。
+ *
+ * 引用行不能省：围炉里点「引用」看着像那么回事，但如果投递时只带 replyTo 这个 id，
+ * agent 根本不知道被引用的是哪句话，等于引用只对自己可见。
  */
 export function renderInboundMessage({ message, chatId, chatTitle, markerTemplate } = {}) {
   const sender = message?.sender ?? {};
@@ -57,8 +60,15 @@ export function renderInboundMessage({ message, chatId, chatTitle, markerTemplat
     truncated = true;
   }
 
-  const head = `${marker} ${text}`.trimEnd();
-  const lines = [head, ...attachmentLines(message?.attachments)];
+  const lines = [];
+
+  const preview = message?.replyPreview;
+  if (preview && preview.text) {
+    lines.push(`[引用 ${preview.sender || '?'}] ${preview.text}`);
+  }
+
+  lines.push(`${marker} ${text}`.trimEnd());
+  lines.push(...attachmentLines(message?.attachments));
   if (truncated) lines.push(`[已截断] 原文超过 ${MAX_INBOUND_CHARS} 字，只投递前 ${MAX_INBOUND_CHARS} 字`);
   return lines.join('\n');
 }

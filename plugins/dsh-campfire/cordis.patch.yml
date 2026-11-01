@@ -1,13 +1,16 @@
 # 围炉（campfire）→ DSH 渠道插件。
 #
-# 这个 patch 只负责把插件挂进 Loader。运行参数（baseUrl / token / 成员 handle / 会话目录）
-# 按下面的优先级解析，**不要把真实 token 写进本文件**：
-#   1. 本行 config（profile 的 cordis.patch.yml 用同 id `campfire` 覆盖，最常用）
-#   2. 环境变量 CAMPFIRE_BASE_URL / CAMPFIRE_TOKEN / CAMPFIRE_MEMBER
-#   3. 配置文件 $DSH_HOME/campfire/config.json（默认位置，可用 configFile 改）
-# 完整字段见 docs/design/DSH-PLUGIN.md。
+# 这个 patch 只负责把插件挂进 Loader，**不写任何默认参数**。
+# 运行参数（baseUrl / token / 成员 handle / 会话目录）按下面的优先级解析，
+# **不要把真实 token 写进本文件**：
+#   1. 环境变量 CAMPFIRE_BASE_URL / CAMPFIRE_TOKEN / CAMPFIRE_MEMBER
+#   2. 配置文件 $DSH_HOME/campfire/config.json（默认位置，可用 configFile 改）
+#   3. 插件导出的 Config schema 默认值
+#
+# 注意：这里以前写死了 `config: { memberHandle: facai }`，后果是——
+# DSH 会把 schema 默认值一并当成行内配置传进来，其中的空 baseUrl / 空 token
+# 会覆盖配置文件里的真实值，表现为「插件读不到配置、一直不连围炉」。
+# 所以：本文件不要放 config 段，参数一律走配置文件或界面。
 - insert:
     - id: campfire
       name: campfire-dsh-plugin
-      config:
-        memberHandle: facai

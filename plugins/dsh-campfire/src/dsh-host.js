@@ -218,7 +218,7 @@ export function createDshHost({ ctx, config = {}, log = () => {} }) {
         resolve(value);
       };
       const timer = setTimeout(() => finish({ timedOut: true }), Math.max(1_000, timeoutMs));
-      waits.set(sessionId, { texts: collected, finish });
+      waits.set(sessionId, { texts: collected, finish, agent });
     });
 
     if (outcome?.timedOut) {
@@ -255,6 +255,25 @@ export function createDshHost({ ctx, config = {}, log = () => {} }) {
       if (sessionQueues.get(key) === tail) sessionQueues.delete(key);
     });
     return current;
+  }
+
+  /**
+   * 中断某个会话正在等的那一轮（对应围炉里的「停止」）。
+   *
+   * 两件事一起做：叫停 agent 本身，再让 waitForTurn 立刻收尾 —— 只 cancel
+   * 不 finish 的话，等待方还得等到超时才知道结束了。
+   * 返回 false 表示当前没有在跑的一轮。
+   */
+  function cancel(sessionId) {
+    const wait = waits.get(String(sessionId));
+    if (!wait) return false;
+    try {
+      wait.agent?.cancel?.({ kind: 'user', reason: '围炉用户点了停止' });
+    } catch (error) {
+      log('debug', `取消会话 ${sessionId} 失败：${error?.message ?? error}`);
+    }
+    wait.finish({ cancelled: true });
+    return true;
   }
 
   /** 唤醒一轮（followup）并等它跑完，返回这轮 assistant 文本。 */
@@ -327,6 +346,7 @@ export function createDshHost({ ctx, config = {}, log = () => {} }) {
     openSession,
     ask,
     inject,
+    cancel,
     dispose,
     resolveAgentOptions,
     resolveCwd,

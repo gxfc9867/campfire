@@ -6,7 +6,7 @@
  * （默认 `$DSH_HOME/campfire/config.json`），既能用命令行脚本写，也不进仓库。
  */
 
-import fs from 'node:fs/promises';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -67,7 +67,13 @@ function pickDefined(source) {
   const out = {};
   if (!source || typeof source !== 'object') return out;
   for (const key of ROW_KEYS) {
-    if (source[key] !== undefined && source[key] !== null) out[key] = source[key];
+    const value = source[key];
+    if (value === undefined || value === null) continue;
+    // 空字符串视为「这一层没填」。DSH 会按导出的 Config schema 生成一整套默认值
+    // 作为行内 config 传进来，里面 baseUrl/token 都是 ''——如果照收，就会把
+    // 配置文件里的真实值覆盖成空，表现为「插件读不到配置」。
+    if (typeof value === 'string' && value.trim() === '') continue;
+    out[key] = value;
   }
   return out;
 }
@@ -101,7 +107,7 @@ function expandHome(filePath, env = process.env) {
 async function readSecretFile(filePath, log) {
   if (!filePath) return '';
   try {
-    const raw = await fs.readFile(filePath, 'utf8');
+    const raw = fs.readFileSync(filePath, 'utf8');
     return raw.trim();
   } catch (error) {
     log('warn', `围炉 token 文件读取失败：${filePath}（${error?.message ?? error}）`);
@@ -118,7 +124,7 @@ export async function resolveConfig(row = {}, { env = process.env, log = () => {
 
   let fileConfig = {};
   try {
-    fileConfig = JSON.parse(await fs.readFile(configFile, 'utf8'));
+    fileConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
     if (!fileConfig || typeof fileConfig !== 'object') fileConfig = {};
   } catch (error) {
     if (error?.code !== 'ENOENT') {
@@ -135,11 +141,19 @@ export async function resolveConfig(row = {}, { env = process.env, log = () => {
     cwd: env.CAMPFIRE_CWD,
   };
 
+  /**
+   * 优先级（从低到高）：schema 默认值 → 行内 config → 环境变量 → 配置文件。
+   *
+   * 行内 config 之所以排在配置文件**之前**，是因为 DSH 会按插件导出的 Config
+   * schema 生成一整套默认值当行内 config 传进来（baseUrl:''、memberHandle:'facai'
+   * 等）。如果让行内 config 最高，用户在界面里填的值（写进配置文件）会被这些
+   * 默认值盖掉，表现为「保存了却读不到」。用户在界面上填的东西必须说了算。
+   */
   const merged = {
     ...DEFAULT_CONFIG,
-    ...pickDefined(fileConfig),
-    ...pickDefined(envLayer),
     ...pickDefined(row),
+    ...pickDefined(envLayer),
+    ...pickDefined(fileConfig),
   };
 
   const resolved = {

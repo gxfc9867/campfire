@@ -1,6 +1,6 @@
 {
   "name": "campfire-dsh-plugin",
-  "version": "0.2.0",
+  "version": "1.0.5",
   "type": "module",
   "description": "围炉（campfire）→ DeepSeek Harness 渠道插件：把围炉群消息投进 DSH 会话，把回复发回围炉。",
   "keywords": [
@@ -17,11 +17,13 @@
   },
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
+    "client.js",
     "src",
     "cordis.patch.yml",
     "locale",
@@ -31,6 +33,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
     }
   },
   "dependencies": {

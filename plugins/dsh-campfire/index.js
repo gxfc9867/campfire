@@ -11,11 +11,15 @@
  */
 
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { createBridge } from './src/bridge.js';
 import { createCampfireClient } from './src/campfire-client.js';
 import { createStateStore } from './src/bindings.js';
 import { describeConfig, resolveConfig } from './src/config.js';
+import { registerConfigRoutes } from './src/config-api.js';
 import { createDshHost } from './src/dsh-host.js';
 
 /**
@@ -85,21 +89,60 @@ export { Config };
 
 export const name = 'campfire-dsh-plugin';
 
-/** 依赖的 Host 服务：没有它们插件不激活（不会抛错拖垮整个 profile）。 */
-export const inject = ['agents', 'sessions'];
+/**
+ * 依赖的 Host 服务。webServer 是配置面板的载体：cordis 不允许在 inject 之外
+ * 访问宿主服务（会抛 cannot get property "webServer" without inject）。
+ * 没有 webServer 的宿主（如 headless）插件不会激活，那种场景本来也没有界面可配，
+ * 直接改配置文件即可。
+ */
+export const inject = ['agents', 'sessions', 'webServer'];
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
 
+/**
+ * 排查用日志文件。
+ *
+ * DSH 桌面/容器里 Electron 会接管 stdout，console 输出不一定进 docker logs，
+ * 而「插件连不上」这类问题恰恰最需要看启动过程。所以除了 logger/console，
+ * 再往 $DSH_HOME/campfire/plugin.log 追加一份——只在 debug 级别下写，正常不产生垃圾。
+ */
+function resolveLogFile(env = process.env) {
+  const root = env.DSH_HOME || env.DSH_PROFILE_DIR || path.join(os.homedir(), '.campfire');
+  return path.join(root, 'campfire', 'plugin.log');
+}
+
+function appendLogFile(file, text) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${new Date().toISOString()} ${text}\n`, 'utf8');
+  } catch {
+    // 写日志失败绝不能影响插件本身
+  }
+}
+
+// 模块加载留痕：debug 级别下写入 plugin.log，便于排查「插件没连上」这类问题
+appendLogFile(resolveLogFile(), `BOOT module loaded | DSH_HOME=${process.env.DSH_HOME || '(empty)'} | pid=${process.pid}`);
+
 function createLogger(ctx, level) {
   let threshold = LEVELS[level] ?? LEVELS.info;
+  const logFile = resolveLogFile();
 
   function emit(lvl, message) {
     if ((LEVELS[lvl] ?? LEVELS.info) < threshold) return;
     const text = `[campfire] ${message}`;
+    // debug 级别下同时落盘：容器里 stdout 不可靠时，这是唯一能看见启动流程的地方
+    if (threshold <= LEVELS.debug) appendLogFile(logFile, `${lvl.toUpperCase()} ${message}`);
+    // 同时打到 stdout：DSH 跑在容器里时，只有 stdout 会进 docker logs，
+    // 排查「插件没连上」这类问题时看不到日志等于瞎猜。
+    // debug 级别下连 info 也打，便于完整追踪启动流程。
+    const toStdout = lvl === 'error' || lvl === 'warn' || lvl === 'debug' || (lvl === 'info' && threshold <= LEVELS.debug);
     try {
       const sink = ctx.logger ?? ctx.get?.('logger');
       if (sink && typeof sink[lvl] === 'function') {
         sink[lvl](text);
+        // 同时打到 stdout：DSH 跑在容器里时，只有 stdout 会进 docker logs，
+        // 排查「插件没连上」这类问题时看不到日志等于瞎猜。
+        if (toStdout) (lvl === 'error' ? console.error : lvl === 'warn' ? console.warn : console.log)(text);
         return;
       }
     } catch {
@@ -152,9 +195,30 @@ export function apply(ctx, config) {
     const booting = (async () => {
       const resolved = await resolveConfig(row, { log: logger.emit });
       logger.setLevel(resolved.logLevel);
+      logger.debug(
+        `配置解析完成：baseUrl=${resolved.baseUrl || '(空)'} member=${resolved.memberHandle} chats=${JSON.stringify(resolved.chatIds)} token=${resolved.token ? '已配置' : '缺失'} logLevel=${resolved.logLevel}`,
+      );
+
+      // 配置面板必须先于「待命」分支挂载：从没配过的新用户正是最需要它的人。
+      // webServer 用可选获取而不是写进 inject，这样没有该服务的宿主仍能正常加载插件。
+      try {
+        // webServer 是宿主服务的属性（dsh-model-health 也是直接 ctx.webServer.register），
+        // ctx.get('webServer') 在部分版本上拿不到，两个都试一下。
+        const webServer = ctx.webServer ?? ctx.get?.('webServer');
+        if (webServer) {
+          registerConfigRoutes(
+            { webServer },
+            { configFile: resolved.configFile, resolved, log: logger.emit },
+          );
+        } else {
+          logger.info('宿主没有 webServer 服务，配置面板不可用（可继续用配置文件）');
+        }
+      } catch (error) {
+        logger.warn(`挂载配置面板失败：${error?.message ?? error}`);
+      }
 
       if (!resolved.baseUrl) {
-        logger.info('未配置围炉 baseUrl，插件待命（不拉流）。配置见 docs/design/DSH-PLUGIN.md');
+        logger.info('未配置围炉 baseUrl，插件待命（不拉流）。到「设置 → 围炉渠道」填地址和令牌。');
         return;
       }
       if (resolved.chatIds.length === 0) {
