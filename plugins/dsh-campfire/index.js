@@ -16,6 +16,67 @@ import { createStateStore } from './src/bindings.js';
 import { describeConfig, resolveConfig } from './src/config.js';
 import { createDshHost } from './src/dsh-host.js';
 
+/**
+ * 配置 schema（schemastery）。
+ *
+ * 导出它的作用是让 DSH 知道有哪些可配项、类型与默认值，从而在插件界面里渲染表单，
+ * 而不是逼用户去手改 `$DSH_HOME/campfire/config.json`。
+ *
+ * 这里用顶层 await + try/catch 而不是静态 import：本插件是零依赖的，从仓库目录
+ * link 安装时解析不到 schemastery（它只存在于 DSH 自己的 node_modules 里）。
+ * 那种情况下 Config 为 undefined，DSH 会当作「没有 schema」，配置仍然走配置文件，
+ * 功能完全不受影响——所以有则用、无则退，不拿它当硬依赖。
+ */
+let Config;
+try {
+  const { default: Schema } = await import('schemastery');
+  Config = Schema.object({
+    baseUrl: Schema.string()
+      .default('')
+      .description('围炉服务地址，例如 http://192.168.31.252:8099。留空则插件待命、不拉流。'),
+    token: Schema.string()
+      .role('secret')
+      .default('')
+      .description('渠道令牌（一 token = 一成员），在围炉里为该成员创建后粘贴到这里。'),
+    memberHandle: Schema.string()
+      .default('facai')
+      .description('本插件在围炉里的成员 handle（英文小写），要和令牌所属成员一致。'),
+    chatIds: Schema.array(Schema.string())
+      .default(['main'])
+      .description('要接入的群 ID 列表，例如 ["main"]。留空则待命。'),
+    cwd: Schema.string()
+      .default('')
+      .description('会话工作目录（绝对路径）。留空则用 DSH 当前工作区。建议填一个干净目录。'),
+    sessionScope: Schema.string()
+      .default('member')
+      .description('会话绑定粒度：member = 一个成员一个会话（推荐）；per-chat = 每个群一个会话。'),
+    wait: Schema.number()
+      .default(25)
+      .description('长轮询挂起秒数（0–30）。越大越省资源，越小越实时。'),
+    replyTimeoutMs: Schema.number()
+      .default(120000)
+      .description('等模型把一轮跑完的上限（毫秒）。超时会中断这一轮。'),
+    tokenEnv: Schema.string()
+      .default('CAMPFIRE_TOKEN')
+      .description('若不想把令牌写进配置，可改从该环境变量读取。'),
+    tokenFile: Schema.string()
+      .default('')
+      .description('或从文件读取令牌（支持 ~ 开头）。token 留空时才会用到。'),
+    provider: Schema.string()
+      .default('')
+      .description('会话使用的模型 provider，留空继承 DSH 当前默认。'),
+    model: Schema.string()
+      .default('')
+      .description('会话使用的模型名，留空继承 DSH 当前默认。'),
+    logLevel: Schema.string()
+      .default('info')
+      .description('日志级别：debug | info | warn | error | silent。'),
+  }).description('围炉（campfire）DSH 渠道插件');
+} catch {
+  Config = undefined;
+}
+export { Config };
+
 export const name = 'campfire-dsh-plugin';
 
 /** 依赖的 Host 服务：没有它们插件不激活（不会抛错拖垮整个 profile）。 */
