@@ -367,6 +367,25 @@ export class Store {
     return rows.map(mapMessage);
   }
 
+  /**
+   * 同类系统提示在窗口内是否已经发过。
+   * 用来给「接力到顶」这类提示去重——两个 agent 来回 @ 时，每轮都会触发一次上限，
+   * 每次都插一条一模一样的系统消息，群里直接被刷屏。
+   */
+  hasRecentSystemNotice(chatId, kind, withinMs = 5 * 60 * 1000) {
+    const since = Date.now() - Math.max(0, Number(withinMs) || 0);
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS hit FROM messages
+          WHERE chat_id = ? AND sender = 'system'
+            AND json_extract(meta, '$.kind') = ?
+            AND created_at > ?
+          LIMIT 1`,
+      )
+      .get(chatId, String(kind), since);
+    return Boolean(row);
+  }
+
   // ── 收件箱 ──────────────────────────────────────────────────────────
 
   /**
@@ -383,7 +402,8 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT * FROM messages
-          WHERE (sender = 'system' OR json_extract(meta, '$.mentionsOwner') = 1)
+          WHERE (json_extract(meta, '$.mentionsOwner') = 1
+                 OR (sender = 'system' AND json_extract(meta, '$.kind') = 'expired'))
             AND created_at > ?
           ORDER BY created_at DESC
           LIMIT ?`,
@@ -397,7 +417,8 @@ export class Store {
     return this.db
       .prepare(
         `SELECT COUNT(*) AS n FROM messages
-          WHERE (sender = 'system' OR json_extract(meta, '$.mentionsOwner') = 1)
+          WHERE (json_extract(meta, '$.mentionsOwner') = 1
+                 OR (sender = 'system' AND json_extract(meta, '$.kind') = 'expired'))
             AND created_at > ?`,
       )
       .get(Number(since) || 0).n;

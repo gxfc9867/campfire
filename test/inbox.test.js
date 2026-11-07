@@ -21,7 +21,7 @@ async function setup() {
       body: JSON.stringify({ chatId: 'main', text, clientMsgId: `c-${Math.random().toString(36).slice(2)}` }),
     });
 
-  return { app, owner, token, asMember };
+  return { env: app, app: app.app, owner, token, asMember };
 }
 
 test('收件箱：成员 @ 主人 的消息会进来', async () => {
@@ -36,7 +36,7 @@ test('收件箱：成员 @ 主人 的消息会进来', async () => {
     assert.equal(data.items[0].chatName, '大厅');
     assert.match(data.items[0].message.text, /@主人/);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -48,7 +48,7 @@ test('收件箱：没 @ 主人的普通消息不进来', async () => {
     assert.equal(data.items.length, 0);
     assert.equal(data.unread, 0);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -61,7 +61,7 @@ test('收件箱：@我 / @owner / @me 都算', async () => {
     const data = (await s.owner.get('/api/inbox')).data;
     assert.equal(data.items.length, 3);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -72,7 +72,7 @@ test('收件箱：@ 了别人不算 @我', async () => {
     const data = (await s.owner.get('/api/inbox')).data;
     assert.equal(data.items.length, 0);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -94,7 +94,7 @@ test('收件箱：未读数与标记已读', async () => {
     assert.equal(data.items.length, 2, '条目本身还在，只是不再算未读');
     assert.ok(data.items.every((i) => i.unread === false));
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -112,7 +112,7 @@ test('收件箱：新消息在已读之后仍然算未读', async () => {
     assert.match(data.items[0].message.text, /新消息/);
     assert.equal(data.items[0].unread, true);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -129,7 +129,7 @@ test('收件箱：按时间倒序，最新的在前', async () => {
     assert.match(data.items[0].message.text, /第三/);
     assert.match(data.items[2].message.text, /第一/);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
 
@@ -142,6 +142,74 @@ test('收件箱：limit 生效', async () => {
     // unread 是总数，不受 limit 影响
     assert.equal(data.unread, 5);
   } finally {
-    await s.app.close();
+    await s.env.close();
   }
 });
+
+// ── 系统消息分级 ────────────────────────────────────────────────────
+
+const SENDER = { system: 'system' };
+
+function insertSystem(app, text, meta) {
+  return app.ctx.store.insertMessage({
+    chatId: 'main',
+    sender: SENDER.system,
+    text,
+    meta,
+  });
+}
+
+test('收件箱：接力到顶的提示不进收件箱（过程噪音）', async () => {
+  const s = await setup();
+  try {
+    insertSystem(s.app, '成员之间的接力到此为止（已连续 3 跳）', { kind: 'chain_stop' });
+    const data = (await s.owner.get('/api/inbox')).data;
+    assert.equal(data.items.length, 0, 'chain_stop 不该进收件箱');
+    assert.equal(data.unread, 0);
+  } finally {
+    await s.env.close();
+  }
+});
+
+test('收件箱：用户自己点的取消不进收件箱', async () => {
+  const s = await setup();
+  try {
+    insertSystem(s.app, '给 @ruyi 的那条消息已取消投递。', { kind: 'cancelled' });
+    const data = (await s.owner.get('/api/inbox')).data;
+    assert.equal(data.items.length, 0);
+  } finally {
+    await s.env.close();
+  }
+});
+
+test('收件箱：投递超时（expired）要进收件箱', async () => {
+  const s = await setup();
+  try {
+    insertSystem(s.app, '@ruyi 的这条消息还没被处理（已等待 10 分钟）', { kind: 'expired' });
+    const data = (await s.owner.get('/api/inbox')).data;
+    assert.equal(data.items.length, 1);
+    assert.equal(data.items[0].kind, 'system');
+    assert.match(data.items[0].message.text, /还没被处理/);
+  } finally {
+    await s.env.close();
+  }
+});
+
+test('同类系统提示在冷却期内只发一条', async () => {
+  const s = await setup();
+  try {
+    const store = s.app.ctx.store;
+    assert.equal(store.hasRecentSystemNotice('main', 'chain_stop', 60_000), false);
+
+    insertSystem(s.app, '接力到此为止', { kind: 'chain_stop' });
+    assert.equal(store.hasRecentSystemNotice('main', 'chain_stop', 60_000), true);
+
+    // 别的 kind 不受影响
+    assert.equal(store.hasRecentSystemNotice('main', 'expired', 60_000), false);
+    // 别的群不受影响
+    assert.equal(store.hasRecentSystemNotice('other', 'chain_stop', 60_000), false);
+  } finally {
+    await s.env.close();
+  }
+});
+

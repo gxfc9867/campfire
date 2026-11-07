@@ -1,4 +1,4 @@
-import { MAIN_CHAT, SENDER, JOB_STATUS, DRIVER } from '../constants.js';
+import { MAIN_CHAT, SENDER, JOB_STATUS, DRIVER, SYSTEM_NOTICE_COOLDOWN_MS } from '../constants.js';
 import { badRequest, notFound } from '../errors.js';
 import { readJson, readBody, sendJson, prepareStream, createLimiter, clientIp } from '../http/util.js';
 import { parseTargets } from '../targets.js';
@@ -110,13 +110,17 @@ export function registerMessageRoutes(router, ctx) {
 
     if (depth > maxDepth) {
       log.info(`接力深度 ${depth} 已达上限，@${targets.join(',') || '…'} 不再投递`);
-      store.insertMessage({
-        chatId,
-        sender: SENDER.system,
-        text: '成员之间的接力到此为止（已连续 3 跳），需要的话请主人亲自接话。',
-        meta: { kind: 'chain_stop' },
-      });
-      hub.emit('change', { type: 'message', chatId });
+      // 同群冷却期内只留一条：两个 agent 来回 @ 时每轮都会撞上限，
+      // 每次插一条一模一样的提示，群里直接被刷屏
+      if (!store.hasRecentSystemNotice(chatId, 'chain_stop', SYSTEM_NOTICE_COOLDOWN_MS)) {
+        store.insertMessage({
+          chatId,
+          sender: SENDER.system,
+          text: '成员之间的接力到此为止（已连续 3 跳），需要的话请主人亲自接话。',
+          meta: { kind: 'chain_stop' },
+        });
+        hub.emit('change', { type: 'message', chatId });
+      }
       return jobs;
     }
 

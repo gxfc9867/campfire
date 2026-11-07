@@ -76,7 +76,7 @@ export function createBridge({ client, store, host, config, log = () => {}, slee
           await client.sendMessage({
             chatId,
             text:
-              `⚠️ 我之前用的 DSH 会话 \`${binding.sessionId}\` 已经不在了（可能被删除了）。\n` +
+              `@主人 ⚠️ 我之前用的 DSH 会话 \`${binding.sessionId}\` 已经不在了（可能被删除了）。\n` +
               `我已经新建一个会话继续接消息；如果这不是你想要的，请到围炉的「接入设置」里重新指定。`,
             clientMsgId: `campfire-session-gone:${binding.sessionId}:${Date.now()}`,
           });
@@ -270,7 +270,7 @@ export function createBridge({ client, store, host, config, log = () => {}, slee
         try {
           await client.sendMessage({
             chatId,
-            text: `⚠️ 这条消息我处理失败了：${error?.message ?? error}\n（常见原因：DSH 里的会话被删除或停用，请检查「围炉渠道」的会话是否还在）`,
+            text: `@主人 ⚠️ 这条消息我处理失败了：${error?.message ?? error}\n（常见原因：DSH 里的会话被删除或停用，请检查「围炉渠道」的会话是否还在）`,
             clientMsgId: `campfire-error:${updateId}`,
           });
           log('info', `已把失败原因回写到围炉群 ${chatId}`);

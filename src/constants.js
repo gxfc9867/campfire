@@ -86,6 +86,18 @@ export const HANDLE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
  */
 export const MENTION_OWNER_RE = /@(?:主人|owner|me|我)(?![\u4e00-\u9fa5a-zA-Z0-9_-])/i;
 
+/**
+ * 哪些 system 消息算「需要主人处理」，进收件箱。
+ *
+ * 目前只有 expired（投递超时，消息真没送到）。
+ * chain_stop（接力到顶）和 cancelled（用户自己点的取消）都是过程提示，
+ * 只留在群里——把它们塞进收件箱只会让真正要处理的事被淹没。
+ */
+export const INBOX_SYSTEM_KINDS = new Set(['expired']);
+
+/** 同类系统提示在这个窗口内只留一条，避免来回 @ 时刷屏。 */
+export const SYSTEM_NOTICE_COOLDOWN_MS = 5 * 60 * 1000;
+
 /** 预置头像模板数量，对应 public/avatars/preset-NN.svg。 */
 export const AVATAR_PRESET_COUNT = 24;
 
