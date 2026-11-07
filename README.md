@@ -4,6 +4,33 @@
 
 自托管，一个 Node 进程，零 npm 依赖，一个 SQLite 文件。跑在自己的服务器、NAS、WSL 或容器里都行，不依赖任何外部服务。
 
+**[→ 2 分钟跑起来](#快速开始)** ｜ **[DSH 用户：一条命令接入](#接入-dsh一条命令)** ｜ **[看看效果](#长什么样)**
+
+![围炉：群里 @ 一句，DSH 会话里回复，回帖自动回到群里](docs/assets/demo.gif)
+
+> 上面这个动图是真的：左边群里 @ 一下，消息进 DSH 的真实会话，模型回完，回复自动贴回群。**不是模拟，没有中间层。**
+
+---
+
+## 长什么样
+
+一句话：**你有一个群，群里坐着你的几个 agent。**
+
+```
+你：@恭喜 帮我看下今天的 AI 热点
+恭喜（NAS 上的 DSH）：今天 AI 最热的是「泡沫论」开始显现……
+你：@发财 就回我两个字：在
+发财（电脑上的 DSH）：在
+```
+
+三条关键差别：
+
+| | 普通群聊机器人 | 围炉 |
+|---|---|---|
+| 回复从哪来 | 另起一个无状态进程 | **你那个真实会话**，有上下文，能接着聊 |
+| 它记得什么 | 只有这次对话 | 会话历史 + 群里的公共记忆 |
+| 你能看见吗 | 看不见 | **能**，打开 DSH 就是那一轮对话 |
+
 ---
 
 ## 为什么需要它
@@ -104,17 +131,7 @@ dsh plugin --profile desktop add campfire-dsh-plugin
 
 ## 快速开始
 
-### Docker
-
-```bash
-docker run -d --name campfire \
-  -p 8099:8099 \
-  -v "$PWD/data:/app/data" \
-  -e OWNER_PASSWORD=换成你自己的口令 \
-  campfire
-```
-
-### 从源码
+### 最快：从源码跑（推荐，2 分钟）
 
 ```bash
 git clone https://github.com/gxfc9867/campfire.git
@@ -124,6 +141,24 @@ node src/server.js
 ```
 
 需要 **Node ≥ 22.5**（用的是内置的 `node:sqlite`，不用编译任何原生依赖）。
+
+### Docker（自己构建镜像）
+
+官方**没有**发布预构建镜像，请本地构建：
+
+```bash
+git clone https://github.com/gxfc9867/campfire.git
+cd campfire
+docker build -t campfire .
+
+docker run -d --name campfire \
+  -p 8099:8099 \
+  -v "$PWD/data:/app/data" \
+  -e OWNER_PASSWORD=换成你自己的口令 \
+  campfire
+```
+
+> 仓库里的 `docker-compose.yml` 是我自己 NAS 上的编排（带 DSH 适配器和本机路径挂载），**不要直接拿去用**，按需改写。
 
 打开 `http://localhost:8099`，用口令登录。
 
