@@ -4,7 +4,7 @@
 
 自托管，一个 Node 进程，零 npm 依赖，一个 SQLite 文件。跑在自己的服务器、NAS、WSL 或容器里都行，不依赖任何外部服务。
 
-**[→ 2 分钟跑起来](#快速开始)** ｜ **[DSH 用户：一条命令接入](#接入-dsh一条命令)** ｜ **[看看效果](#长什么样)**
+**[→ 2 分钟跑起来](#快速开始)** ｜ **[DSH 用户：一条命令接入](#接入-dsh-桌面端)** ｜ **[看看效果](#长什么样)**
 
 ![围炉：群里 @ 一句，DSH 会话里回复，回帖自动回到群里](docs/assets/demo.gif)
 
@@ -202,7 +202,83 @@ GET  /v1/quota           配额与背压
 GET  /v1/control         控制指令（停止）
 ```
 
-认证用 `Authorization: Bearer cf_...`。
+认证用 `Authorization: Bearer cf_...`（渠道令牌，在围炉界面「接入」里生成，只显示一次）。
+
+### 30 行接入一个自己的 agent
+
+这段代码就是 DSH 插件做的事，换成你的语言也一样：
+
+```js
+const BASE = 'http://127.0.0.1:8099';
+const TOKEN = process.env.CF_TOKEN;          // cf_ 开头
+let cursor = 0;
+
+while (true) {
+  // 1) 长轮询拉新消息（wait 单位秒，最长 25）
+  const res = await fetch(`${BASE}/v1/updates?chat=main&cursor=${cursor}&wait=25`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  const { updates = [] } = await res.json();
+
+  for (const u of updates) {
+    cursor = u.seq;                            // 游标跟着 seq 走
+    const text = u.message?.text;              // ← 正文在 message.text
+    if (!u.replyRequired) continue;            // 只回叫醒我的
+
+    const answer = await myAgent(text);        // 你自己的模型/CLI 在这儿
+
+    // 2) 回帖
+    await fetch(`${BASE}/v1/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId: 'main',                        // ← 注意是 chatId，不是 chat
+        text: answer,
+        clientMsgId: crypto.randomUUID(),      // 幂等键，重试不会重复发
+      }),
+    });
+  }
+
+  // 3) 确认游标（可选；不确认也能靠 cursor 续传）
+  await fetch(`${BASE}/v1/updates/ack`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chatId: 'main', seq: cursor }),
+  });
+}
+```
+
+### 拉到的每条 update 长什么样
+
+```json
+{
+  "updateId": "main:1",
+  "type": "message.created",
+  "seq": 1,
+  "chatId": "main",
+  "message": {
+    "text": "@tester 一句话：你是谁？",
+    "sender": { "kind": "user", "handle": "user", "display": "主人" },
+    "mentions": ["tester"]
+  },
+  "wakeup": "reply",
+  "replyRequired": true
+}
+```
+
+- **`message.text`** 是正文（不是 `body`、不是顶层 `text`）
+- **`seq`** 是游标，全局递增，存下来就能断点续传
+- **`replyRequired`** 为 true 才需要回；普通群消息可能是 `false`
+- **`mentions`** 已经解析好了 handle，不用自己扫字符串
+
+### 常见坑（我都踩过）
+
+| 现象 | 原因 |
+|---|---|
+| `401 渠道令牌不正确` | 用的是成员的 `key`，不是 `cf_` 渠道令牌 |
+| `400 消息不能为空` | 字段名是 `text`，不是 `body` / `content` |
+| 回帖 404 或落错群 | 发消息用 `chatId`；`/api/messages` 才用 `chat` |
+| 建令牌 `400 缺少 member` | 字段是 `member`（handle），不是 `handle` |
 
 老接口 `/api/agent/*`（成员密钥 + 长轮询）仍然保留，给 sidecar 场景用。
 
