@@ -5,6 +5,8 @@ import { parseTargets } from '../targets.js';
 import { requestStop } from '../control.js';
 import { toMarkdown, toJson, exportBaseName } from '../export.js';
 import { shortId } from '../id.js';
+import { computeNextRun, newScheduleId } from '../scheduler.js';
+import { validateCron, describeCron } from '../cron.js';
 import { deliverWebhook } from '../drivers/webhook.js';
 import { deliverLlm } from '../drivers/llm.js';
 
@@ -135,6 +137,8 @@ export function registerMessageRoutes(router, ctx) {
    * fanout/enqueue 依赖本函数的闭包（store、members、waiters、planner、log）。
    */
   ctx.deliverToMembers = fanout;
+  // 定时消息调度器要用同一条投递管线：定时消息就是「主人到点发的一条普通消息」
+  ctx.deliver = createAndDeliver;
 
   async function createAndDeliver({ chatId, sender, text, clientId, explicitTargets, replyTo = null }) {
     const chat = store.getChat(chatId);
@@ -320,6 +324,106 @@ export function registerMessageRoutes(router, ctx) {
         'Cache-Control': 'no-store',
       });
       res.end(md);
+    },
+    { auth: 'owner' },
+  );
+
+  // ── 定时消息 ────────────────────────────────────────────────────────
+
+  /** 把 cron 规则翻成人话，前端列表直接显示。 */
+  function decorateSchedule(s) {
+    let description = s.cron;
+    try {
+      description = describeCron(s.cron);
+    } catch {
+      // cron 坏了就原样显示，不至于让整张列表崩掉
+    }
+    return { ...s, description };
+  }
+
+  router.get(
+    '/api/schedules',
+    (req, res, url) => {
+      const chatId = url.searchParams.get('chat') || null;
+      sendJson(res, 200, { schedules: store.listSchedules(chatId).map(decorateSchedule) });
+    },
+    { auth: 'owner' },
+  );
+
+  router.post(
+    '/api/schedules',
+    async (req, res) => {
+      const body = await readJson(req, 16 * 1024);
+      const chatId = String(body.chat || MAIN_CHAT.id);
+      if (!store.getChat(chatId)) throw notFound('会话不存在');
+
+      const text = String(body.text || '').trim();
+      if (!text) throw badRequest('消息内容不能为空');
+      if (text.length > cfg.maxTextLength) throw badRequest('消息过长');
+
+      const cron = String(body.cron || '').trim();
+      try {
+        validateCron(cron);
+      } catch (error) {
+        throw badRequest(`时间规则不合法：${error.message}`);
+      }
+
+      const schedule = store.createSchedule({
+        id: newScheduleId(),
+        chatId,
+        cron,
+        text,
+        nextRunAt: computeNextRun(cron),
+        createdBy: 'owner',
+      });
+      sendJson(res, 201, { schedule: decorateSchedule(schedule) });
+    },
+    { auth: 'owner' },
+  );
+
+  router.patch(
+    /^\/api\/schedules\/([^/]+)$/,
+    async (req, res, url, identity, id) => {
+      const current = store.getSchedule(id);
+      if (!current) throw notFound('定时消息不存在');
+      const body = await readJson(req, 16 * 1024);
+
+      const patch = {};
+      if (body.text !== undefined) {
+        const text = String(body.text).trim();
+        if (!text) throw badRequest('消息内容不能为空');
+        if (text.length > cfg.maxTextLength) throw badRequest('消息过长');
+        patch.text = text;
+      }
+      if (body.cron !== undefined) {
+        const cron = String(body.cron).trim();
+        try {
+          validateCron(cron);
+        } catch (error) {
+          throw badRequest(`时间规则不合法：${error.message}`);
+        }
+        patch.cron = cron;
+        patch.nextRunAt = computeNextRun(cron);
+      }
+      if (body.enabled !== undefined) {
+        patch.enabled = Boolean(body.enabled);
+        // 重新启用时把时间点接上，否则它会一直是 null 永远不触发
+        if (patch.enabled && current.nextRunAt == null) {
+          patch.nextRunAt = computeNextRun(patch.cron || current.cron);
+        }
+      }
+
+      const updated = store.updateSchedule(id, patch);
+      sendJson(res, 200, { schedule: decorateSchedule(updated) });
+    },
+    { auth: 'owner' },
+  );
+
+  router.delete(
+    /^\/api\/schedules\/([^/]+)$/,
+    (req, res, url, identity, id) => {
+      if (!store.deleteSchedule(id)) throw notFound('定时消息不存在');
+      sendJson(res, 200, { ok: true });
     },
     { auth: 'owner' },
   );

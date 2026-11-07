@@ -75,6 +75,28 @@ export const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 5,
+    name: 'schedules',
+    up(db) {
+      // 定时消息：到点往群里发一条，复用正常投递管线（@ 照常叫醒成员）
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS schedules (
+          id          TEXT PRIMARY KEY,
+          chat_id     TEXT NOT NULL,
+          cron        TEXT NOT NULL,
+          text        TEXT NOT NULL,
+          enabled     INTEGER NOT NULL DEFAULT 1,
+          next_run_at INTEGER,
+          last_run_at INTEGER,
+          created_at  INTEGER NOT NULL,
+          created_by  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+        CREATE INDEX IF NOT EXISTS idx_schedules_chat ON schedules(chat_id);
+      `);
+    },
+  },
 ];
 
 export function currentVersion(db) {

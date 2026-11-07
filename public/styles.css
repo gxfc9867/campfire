@@ -2200,6 +2200,71 @@ select.invalid {
   background: rgba(196, 67, 58, 0.08);
 }
 
+/* 定时消息列表 */
+.schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.schedule-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+
+.schedule-row.is-off {
+  opacity: 0.55;
+}
+
+.schedule-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.schedule-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
+}
+
+.schedule-when {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.schedule-next {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.schedule-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.schedule-ops {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.schedule-ops .btn-sm {
+  flex: none;
+  padding: 0 8px;
+}
+
 /* 归档区：默认收起，点开才拉数据 */
 .archive-section {
   margin-top: 18px;

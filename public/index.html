@@ -199,6 +199,51 @@
       </div>
     </div>
 
+    <!-- 定时消息 -->
+    <div class="overlay overlay-sheet" id="schedules" hidden>
+      <div class="sheet sheet-narrow">
+        <header class="sheet-head">
+          <h2>定时消息</h2>
+          <button class="icon-btn" id="btn-close-schedules" aria-label="关闭">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <form class="editor-form" id="schedule-form">
+            <label class="field">
+              <span>时间规则</span>
+              <input
+                id="schedule-cron"
+                name="cron"
+                placeholder="0 9 * * *"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <small class="field-hint">
+                分 时 日 月 周。例：<code>0 9 * * *</code> 每天 9 点 ·
+                <code>30 8 * * 1</code> 每周一 8:30 ·
+                <code>*/30 * * * *</code> 每 30 分钟
+              </small>
+              <small class="field-error" id="schedule-error" hidden></small>
+            </label>
+            <label class="field">
+              <span>消息内容</span>
+              <textarea
+                id="schedule-text"
+                name="text"
+                rows="3"
+                placeholder="到点自动发这条，可以 @ 成员"
+              ></textarea>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="primary-btn" id="btn-save-schedule">添加</button>
+            </div>
+          </form>
+          <div class="schedule-list" id="schedule-list"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- 成员编辑（抽屉式弹层） -->
     <div class="overlay overlay-sheet" id="member-editor" hidden>
       <div class="sheet sheet-narrow">

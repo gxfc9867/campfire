@@ -22,6 +22,7 @@ import { registerMessageRoutes, startJobSweeper } from './routes/messages.js';
 import { registerMemberRoutes } from './routes/member-api.js';
 import { registerChannelRoutes } from './routes/channel-api.js';
 import { registerMcpRoutes } from './mcp/mount.js';
+import { startScheduler } from './scheduler.js';
 
 const log = logger.child('server');
 
@@ -157,6 +158,7 @@ export function createApp(overrides = {}) {
 
   let sweeper = null;
   let sweepTimer = null;
+  let scheduler = null;
 
   async function start() {
     // 口令生成必须发生在任何请求进来之前；announce 在监听成功之后打一次
@@ -176,6 +178,13 @@ export function createApp(overrides = {}) {
       log.info(`数据库迁移 v${store.migration.from} → v${store.migration.to}`);
     }
     sweeper = startJobSweeper({ store, hub, log });
+    scheduler = startScheduler({
+      store,
+      deliver: ctx.deliver,
+      hub,
+      log: logger.child('scheduler'),
+    });
+    scheduler.start();
     sweepTimer = setInterval(() => presence.sweep(), 60_000);
     sweepTimer.unref?.();
 
@@ -188,6 +197,7 @@ export function createApp(overrides = {}) {
   async function stop() {
     if (sweepTimer) clearInterval(sweepTimer);
     if (sweeper) sweeper();
+    if (scheduler) scheduler.stop();
     // 先放行挂起的长轮询，让它们走正常返回路径而不是被硬断
     waiters.closeAll();
     hub.closeAll();

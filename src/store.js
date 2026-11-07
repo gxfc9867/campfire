@@ -346,6 +346,70 @@ export class Store {
     return rows.map(mapMessage);
   }
 
+  // ── 定时消息 ────────────────────────────────────────────────────────
+
+  createSchedule({ id, chatId, cron, text, nextRunAt, createdBy = null }) {
+    this.db
+      .prepare(
+        `INSERT INTO schedules (id, chat_id, cron, text, enabled, next_run_at, last_run_at, created_at, created_by)
+         VALUES (?, ?, ?, ?, 1, ?, NULL, ?, ?)`,
+      )
+      .run(id, chatId, cron, text, nextRunAt, Date.now(), createdBy);
+    return this.getSchedule(id);
+  }
+
+  getSchedule(id) {
+    const row = this.db.prepare('SELECT * FROM schedules WHERE id = ?').get(id);
+    return row ? mapSchedule(row) : null;
+  }
+
+  /** chatId 为空时返回全部（管理页用）。 */
+  listSchedules(chatId) {
+    const rows = chatId
+      ? this.db.prepare('SELECT * FROM schedules WHERE chat_id = ? ORDER BY created_at DESC').all(chatId)
+      : this.db.prepare('SELECT * FROM schedules ORDER BY created_at DESC').all();
+    return rows.map(mapSchedule);
+  }
+
+  /** 到点且启用的，按 next_run_at 升序。 */
+  dueSchedules(now = Date.now(), limit = 50) {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM schedules
+          WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+          ORDER BY next_run_at ASC LIMIT ?`,
+      )
+      .all(now, limit);
+    return rows.map(mapSchedule);
+  }
+
+  updateSchedule(id, patch = {}) {
+    const current = this.getSchedule(id);
+    if (!current) return null;
+    const next = {
+      cron: patch.cron ?? current.cron,
+      text: patch.text ?? current.text,
+      enabled: patch.enabled === undefined ? current.enabled : Boolean(patch.enabled),
+      nextRunAt: patch.nextRunAt === undefined ? current.nextRunAt : patch.nextRunAt,
+    };
+    this.db
+      .prepare('UPDATE schedules SET cron = ?, text = ?, enabled = ?, next_run_at = ? WHERE id = ?')
+      .run(next.cron, next.text, next.enabled ? 1 : 0, next.nextRunAt, id);
+    return this.getSchedule(id);
+  }
+
+  /** 一次触发之后推进时间。 */
+  markScheduleRun(id, { lastRunAt, nextRunAt }) {
+    this.db
+      .prepare('UPDATE schedules SET last_run_at = ?, next_run_at = ? WHERE id = ?')
+      .run(lastRunAt, nextRunAt, id);
+    return this.getSchedule(id);
+  }
+
+  deleteSchedule(id) {
+    return this.db.prepare('DELETE FROM schedules WHERE id = ?').run(id).changes > 0;
+  }
+
   // ── 群成员归属 ──────────────────────────────────────────────────────
 
   /** 重建某成员的全部群归属（配置为准，库内跟随）。 */
@@ -699,6 +763,20 @@ function mapJob(r) {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     expiresAt: r.expires_at,
+  };
+}
+
+function mapSchedule(r) {
+  return {
+    id: r.id,
+    chatId: r.chat_id,
+    cron: r.cron,
+    text: r.text,
+    enabled: Boolean(r.enabled),
+    nextRunAt: r.next_run_at,
+    lastRunAt: r.last_run_at,
+    createdAt: r.created_at,
+    createdBy: r.created_by,
   };
 }
 

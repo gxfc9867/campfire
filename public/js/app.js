@@ -188,6 +188,13 @@ function bindChrome() {
     $('#app').classList.remove('aside-open');
   });
 
+  // 定时消息弹窗
+  $('#btn-close-schedules').addEventListener('click', closeSchedules);
+  $('#schedules').addEventListener('click', (e) => {
+    if (e.target === $('#schedules')) closeSchedules();
+  });
+  $('#schedule-form').addEventListener('submit', submitSchedule);
+
   // 右侧栏分段：成员 / 投递
   $$('.aside-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -262,10 +269,11 @@ async function openChatMenu(chat, x, y) {
   const isDm = chat.kind === 'dm';
   const options =
     chat.id === 'main'
-      ? ['改备注', '导出会话']
+      ? ['改备注', '导出会话', '定时消息']
       : [
           isDm ? '给单聊改备注' : '给群改备注',
           '导出会话',
+          '定时消息',
           isDm ? '归档单聊' : '归档群聊',
           isDm ? '删除单聊' : '解散群聊',
         ];
@@ -273,9 +281,163 @@ async function openChatMenu(chat, x, y) {
   if (!act) return;
   if (act.includes('改备注')) return renameChatFlow(chat);
   if (act === '导出会话') return exportChatFlow(chat, x, y);
+  if (act === '定时消息') return openSchedules(chat);
   if (act === '归档群聊' || act === '归档单聊') return archiveChat(chat);
   if (act === '解散群聊') return dissolveChat(chat);
   if (act === '删除单聊') return removeDm(chat);
+}
+
+// ── 定时消息 ────────────────────────────────────────────────────────
+
+let schedulesChat = null;
+
+async function openSchedules(chat) {
+  schedulesChat = chat;
+  const box = $('#schedules');
+  if (!box) return;
+  box.hidden = false;
+  requestAnimationFrame(() => box.classList.add('is-open'));
+  const err = $('#schedule-error');
+  if (err) err.hidden = true;
+  const form = $('#schedule-form');
+  if (form) form.reset();
+  await loadSchedules();
+}
+
+function closeSchedules() {
+  const box = $('#schedules');
+  if (!box) return;
+  box.classList.remove('is-open');
+  setTimeout(() => {
+    box.hidden = true;
+  }, 160);
+  schedulesChat = null;
+}
+
+async function loadSchedules() {
+  const list = $('#schedule-list');
+  if (!list || !schedulesChat) return;
+  list.innerHTML = '<p class="empty-note">加载中…</p>';
+  try {
+    const { schedules } = await api.schedules(schedulesChat.id);
+    renderSchedules(schedules);
+  } catch (ex) {
+    list.innerHTML = `<p class="empty-note">读取失败：${esc(ex.message)}</p>`;
+  }
+}
+
+function renderSchedules(schedules) {
+  const list = $('#schedule-list');
+  if (!list) return;
+  if (!schedules.length) {
+    list.innerHTML = '<p class="empty-note">还没有定时消息</p>';
+    return;
+  }
+  list.textContent = '';
+  for (const s of schedules) {
+    const row = document.createElement('div');
+    row.className = `schedule-row${s.enabled ? '' : ' is-off'}`;
+
+    const main = document.createElement('div');
+    main.className = 'schedule-main';
+
+    const head = document.createElement('div');
+    head.className = 'schedule-head';
+    const when = document.createElement('span');
+    when.className = 'schedule-when';
+    when.textContent = s.description || s.cron;
+    const next = document.createElement('span');
+    next.className = 'schedule-next';
+    next.textContent = s.enabled && s.nextRunAt ? `下次 ${fmtWhen(s.nextRunAt)}` : '已停用';
+    head.append(when, next);
+
+    const text = document.createElement('div');
+    text.className = 'schedule-text';
+    text.textContent = s.text;
+
+    main.append(head, text);
+
+    const ops = document.createElement('div');
+    ops.className = 'schedule-ops';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'btn-sm';
+    toggle.textContent = s.enabled ? '停用' : '启用';
+    toggle.addEventListener('click', async () => {
+      try {
+        await api.updateSchedule(s.id, { enabled: !s.enabled });
+        await loadSchedules();
+      } catch (ex) {
+        toast(ex.message);
+      }
+    });
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn-sm danger';
+    del.textContent = '删除';
+    del.addEventListener('click', async () => {
+      if (!confirm(`删除这条定时消息？\n\n${s.text}`)) return;
+      try {
+        await api.deleteSchedule(s.id);
+        await loadSchedules();
+        toast('已删除');
+      } catch (ex) {
+        toast(ex.message);
+      }
+    });
+
+    ops.append(toggle, del);
+    row.append(main, ops);
+    list.append(row);
+  }
+}
+
+/** 把时间戳格式化成「今天 09:00」/「11-09 09:00」这种人话。 */
+function fmtWhen(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) return `今天 ${hh}:${mm}`;
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hh}:${mm}`;
+}
+
+async function submitSchedule(event) {
+  event.preventDefault();
+  if (!schedulesChat) return;
+  const errBox = $('#schedule-error');
+  const cron = $('#schedule-cron').value.trim();
+  const text = $('#schedule-text').value.trim();
+  if (errBox) errBox.hidden = true;
+
+  if (!cron) return showScheduleError('请填时间规则');
+  if (!text) return showScheduleError('消息内容不能为空');
+
+  const btn = $('#btn-save-schedule');
+  btn.disabled = true;
+  try {
+    await api.createSchedule({ chat: schedulesChat.id, cron, text });
+    $('#schedule-form').reset();
+    await loadSchedules();
+    toast('已添加');
+  } catch (ex) {
+    showScheduleError(ex.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showScheduleError(message) {
+  const errBox = $('#schedule-error');
+  if (!errBox) return;
+  errBox.textContent = message;
+  errBox.hidden = false;
 }
 
 /**

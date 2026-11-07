@@ -68,6 +68,15 @@ export const api = {
   exportChatUrl: (id, format = 'md') =>
     `/api/chats/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
 
+  // 定时消息
+  schedules: (chat) => request(`/api/schedules${chat ? `?chat=${encodeURIComponent(chat)}` : ''}`),
+  createSchedule: ({ chat, cron, text }) =>
+    request('/api/schedules', { method: 'POST', body: { chat, cron, text } }),
+  updateSchedule: (id, patch) =>
+    request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }),
+  deleteSchedule: (id) =>
+    request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   status: (chatId) => request(`/api/status${chatId ? `?chat=${encodeURIComponent(chatId)}` : ''}`),
   jobs: (chatId) => request(`/api/jobs?chat=${encodeURIComponent(chatId)}`),
   retryJob: (id) => request(`/api/jobs/${id}/retry`, { method: 'POST' }),
