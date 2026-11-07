@@ -245,7 +245,7 @@ function renderGrid() {
 
 /**
  * 桥侧自检：这个成员的通道到底通不通。
- * 只查服务端掌握的事实（sidecar 在不在、上次活跃时间、唤醒决策），
+ * 只查服务端掌握的事实（成员在不在、上次活跃时间、唤醒决策），
  * 不真的拉起进程——真跑一次命令是「深度测试」，交给 doctor。
  */
 /**
@@ -359,7 +359,7 @@ async function openConnect(handle, key) {
   const waitingText =
     driverType === 'pull'
       ? '插件还没连上来 · 在 DSH 里填好三项并重启后，这里会自动变绿'
-      : '等待 sidecar 连上来…';
+      : '等待成员连上来…';
   setConnectState('waiting', member?.presence?.reachable ? '正在确认状态…' : waitingText);
 
   // 密钥可能没随列表下发明文，单独取一次；失败就留空让用户点「显示」重试
@@ -380,7 +380,6 @@ async function openConnect(handle, key) {
 
 /** 接入页对「桥内直连」的成员换一套说法：它已经能说话了，不需要任何外部进程。 */
 function renderConnectForLlm() {
-  $('#connect-manual').hidden = true;
   $('#connect-ready').hidden = false;
   $('#connect-dsh').hidden = true;
   $('#connect-lead').hidden = true;
@@ -407,11 +406,10 @@ function el(tag, props, ...children) {
 }
 
 async function renderConnectForDsh() {
-  $('#connect-manual').hidden = true;
   $('#connect-ready').hidden = true;
   $('#connect-dsh').hidden = false;
   $('#connect-lead').hidden = true;
-  // 成员密钥是给 sidecar 用的，pull 路线用不上，藏掉免得误导
+  // 成员密钥是给外部进程认领身份用的，pull 路线用不上，藏掉免得误导
   $('.connect-key').hidden = true;
 
   await renderChannelArea();
@@ -544,28 +542,9 @@ function renderConnect() {
     $('.connect-key').hidden = true;
     return;
   }
-  // pull 驱动走的是渠道令牌 + /v1 接口（DSH 插件、WorkBuddy 桥），和 sidecar 完全两套
-  if (connect.driverType === 'pull') {
-    renderConnectForDsh();
-    return;
-  }
-  $('#connect-manual').hidden = false;
-  $('#connect-ready').hidden = true;
-  $('#connect-dsh').hidden = true;
-  $('#connect-lead').hidden = false;
-  $('.connect-key').hidden = false;
-
-  $('#connect-config').textContent = JSON.stringify(cfg, null, 2);
-  $('#connect-cmd').textContent = 'node sidecar/sidecar.js';
-  $('#connect-curl').textContent =
-    `curl -s -H "X-Campfire-Member: ${connect.handle}" ` +
-    `-H "X-Campfire-Key: ${key}" ` +
-    `"${base}/api/agent/profile"`;
-  $('#connect-key').textContent = connect.shown ? key : mask(connect.key);
-  $('#btn-reveal-key').textContent = connect.shown ? '隐藏' : '显示';
-  $('#connect-key-note').textContent = connect.shown
-    ? '密钥等同这个成员的身份，别贴进公开仓库。'
-    : '密钥默认打码，展开后可复制。换机器或重装时用得上。';
+  // pull 驱动走渠道令牌 + /v1 接口（DSH 插件、WorkBuddy 桥）
+  // 走到这里只可能是 pull；其它类型已经在上面 return 了
+  renderConnectForDsh();
 }
 
 function publicBase() {
@@ -602,7 +581,7 @@ function pollConnect() {
       // 轮询失败不打扰用户，下一轮继续
     }
     if (tries >= 120) {
-      setConnectState('waiting', '还没检测到连接。检查 sidecar 日志里的地址与密钥，或点「显示」核对一遍');
+      setConnectState('waiting', '还没检测到连接。检查插件是否已启动、地址与令牌是否正确，或点「显示」核对一遍');
       return;
     }
     connect.timer = setTimeout(tick, 2500);
@@ -627,7 +606,7 @@ async function toggleKey() {
 async function rotateKey() {
   const ok = confirm(
     `重新生成后，旧密钥立刻失效。\n\n` +
-      `已经在跑的 sidecar 会断开连接，必须把新密钥写进配置再重启。\n\n确定继续吗？`,
+      `正在连着的成员会断开连接，必须把新令牌写进插件配置再重启。\n\n确定继续吗？`,
   );
   if (!ok) return;
   try {
@@ -635,7 +614,7 @@ async function rotateKey() {
     connect.key = res.key;
     connect.shown = true;
     renderConnect();
-    setConnectState('waiting', '密钥已更换，等待用新密钥的 sidecar 连上来…');
+    setConnectState('waiting', '令牌已更换，等待用新令牌的成员连上来…');
     pollConnect();
     toast('新密钥已生成，配置里的 key 需要更新');
   } catch (ex) {
@@ -753,9 +732,6 @@ async function openEditor(handle) {
       ? `该成员原本使用已下架的 ${driver.type} 驱动，保存后会改成 pull。`
       : '';
   }
-  form.elements.cmd.value = driver.cmd || '';
-  form.elements.args.value = Array.isArray(driver.args) ? driver.args.join(' ') : '';
-  form.elements.cwd.value = driver.cwd || '';
   form.elements.url.value = driver.url || '';
 
   await ensureProviders();
@@ -913,7 +889,6 @@ function rollAvatar() {
 
 function syncDriverFields() {
   const type = $$('input[name="driverType"]').find((r) => r.checked)?.value || 'pull';
-  $('#cli-fields').hidden = type !== 'cli';
   $('#webhook-fields').hidden = type !== 'webhook';
   $('#llm-fields').hidden = type !== 'llm';
   // llm 型点一下是真的打一次模型接口，比「通道检查」有用得多，所以按钮文案跟着换
@@ -973,13 +948,6 @@ async function save(e) {
 
   const type = $$('input[name="driverType"]').find((r) => r.checked)?.value || 'pull';
   const driver = { type };
-  if (type === 'cli') {
-    if (!form.elements.cmd.value.trim()) return fail('cli 驱动需要填命令');
-    driver.cmd = form.elements.cmd.value.trim();
-    // 参数按空格切分，带空格的参数用引号包起来
-    driver.args = splitArgs(form.elements.args.value);
-    driver.cwd = form.elements.cwd.value.trim();
-  }
   if (type === 'webhook') {
     if (!/^https?:\/\//.test(form.elements.url.value.trim())) return fail('回调地址需以 http(s):// 开头');
     driver.url = form.elements.url.value.trim();
@@ -1051,15 +1019,6 @@ async function save(e) {
     err.hidden = false;
     return undefined;
   }
-}
-
-/** 简易参数切分：支持单双引号包住带空格的参数。 */
-function splitArgs(raw) {
-  const out = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m;
-  while ((m = re.exec(String(raw || '')))) out.push(m[1] ?? m[2] ?? m[3]);
-  return out;
 }
 
 async function archive() {

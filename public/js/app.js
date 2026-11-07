@@ -1891,9 +1891,7 @@ function renderMembersPanel() {
       `<span class="msg-handle">@${esc(m.handle)}</span></div>` +
       `<div class="member-sub">${esc(
         m.presence?.ready
-          ? m.driverType === 'cli'
-            ? '就绪'
-            : '在线'
+          ? '在线'
           : m.presence?.reachable
             ? '可唤醒 · 约 5 秒响应'
             : '离线 · 消息会排队等待',

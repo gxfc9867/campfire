@@ -39,7 +39,6 @@ export const MEMBER_STATE = {
  */
 export const DRIVER = {
   pull: 'pull',
-  cli: 'cli',
   webhook: 'webhook',
   llm: 'llm',
 };

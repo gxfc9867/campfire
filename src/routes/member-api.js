@@ -10,7 +10,7 @@ import { readJson, sendJson } from '../http/util.js';
  * CLI 只是一种驱动方式，不进入协议——否则会把门槛抬回「为每个工具写适配器」。
  */
 export function registerMemberRoutes(router, ctx) {
-  const { cfg, store, members, memory, presence, waiters, hub, planner } = ctx;
+  const { cfg, store, members, memory, presence, waiters, hub } = ctx;
   const log = ctx.log;
 
   /** 把 job 转成成员可读的待办项。 */
@@ -142,28 +142,7 @@ export function registerMemberRoutes(router, ctx) {
     { auth: 'member' },
   );
 
-  // ── 状态上报 ────────────────────────────────────────────────────────
-  router.post(
-    '/api/agent/state',
-    async (req, res, url, identity) => {
-      const handle = identity.member;
-      const body = await readJson(req, 4096);
-      const state = String(body.state || '');
-      if (!Object.values(MEMBER_STATE).includes(state)) {
-        throw badRequest(`state 必须是 ${Object.values(MEMBER_STATE).join(' / ')}`);
-      }
-      presence.setState(handle, state, {
-        pid: body.pid ?? null,
-        running: body.running,
-        limit: body.limit,
-        error: body.error ?? null,
-      });
-      sendJson(res, 200, { ok: true, serverTime: Date.now() });
-    },
-    { auth: 'member' },
-  );
-
-  // ── 档案（sidecar 拼提示词用）──────────────────────────────────────
+  // ── 档案 ────────────────────────────────────────────────────────────
   router.get(
     '/api/agent/profile',
     (req, res, url, identity) => {
@@ -239,44 +218,4 @@ export function registerMemberRoutes(router, ctx) {
     { auth: 'member' },
   );
 
-  /**
-   * 拼好的提示词。
-   * 放在服务端生成而不是让 sidecar 自己拼：三层记忆的顺序与措辞是协议的一部分，
-   * 集中在一处才能保证所有驱动的行为一致。
-   */
-  router.get(
-    '/api/agent/prompt',
-    (req, res, url, identity) => {
-      const m = members.get(identity.member);
-      if (!m) throw notFound('成员不存在');
-      const chatId = url.searchParams.get('chat') || m.chats[0] || '';
-      const chat = store.getChat(chatId);
-      if (!chat) throw notFound('会话不存在');
-      if (!m.chats.includes(chatId)) throw forbidden('你不在这个群里');
-
-      const digest = memory.read(m.handle).digest;
-      const { items } = store.listMessages({ chatId, limit: 20 });
-      const messages = items.map((msg) => ({
-        sender: msg.sender,
-        senderName:
-          msg.sender === SENDER.user
-            ? '主人'
-            : msg.sender === SENDER.system
-              ? '系统'
-              : members.get(msg.sender)?.display || msg.sender,
-        text: msg.text,
-      }));
-
-      const prompt = planner.buildPrompt({
-        member: m,
-        digest,
-        messages,
-        chatName: chat.name,
-        trigger: url.searchParams.get('trigger') || '',
-      });
-
-      sendJson(res, 200, { prompt, chatId, chatName: chat.name });
-    },
-    { auth: 'member' },
-  );
 }

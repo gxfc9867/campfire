@@ -103,9 +103,7 @@ export function memberClient(base, handle, key) {
     inbox: (wait = 0) => req('GET', `/api/agent/inbox?wait=${wait}`),
     reply: (requestId, text) => req('POST', '/api/agent/reply', { requestId, text }),
     ack: (requestIds) => req('POST', '/api/agent/ack', { requestIds }),
-    state: (payload) => req('POST', '/api/agent/state', payload),
     profile: () => req('GET', '/api/agent/profile'),
-    prompt: (chat) => req('GET', `/api/agent/prompt?chat=${chat}`),
     memory: () => req('GET', '/api/agent/memory'),
     setMemory: (digest) => req('PUT', '/api/agent/memory', { digest }),
   };
@@ -118,7 +116,7 @@ export async function createMember(owner, overrides = {}) {
   const r = await owner.post('/api/members', {
     handle: 'echo',
     display: '回声',
-    driver: { type: 'cli', cmd: 'echo', args: ['{{prompt}}'] },
+    driver: { type: 'pull' },
     chats: ['main'],
     ...overrides,
   });

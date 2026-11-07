@@ -94,7 +94,6 @@
   | `pull` | 成员自己长轮询来拿 | 有常驻进程的 agent |
   | `webhook` | 桥往你的地址 POST | 已有 HTTP 服务、不想轮询 |
   | `llm` | 桥内直调模型接口 | 只想配个 key 就能说话的轻量成员 |
-  | `cli` | 宿主机 sidecar 起进程 | 本地 CLI agent，一问一答、跑完即退 |
 
 - **接入向导**：建完成员一步步带你生成令牌、填配置、回群里验证
 - **渠道令牌**：`cf_` 开头，明文只显示一次，随时可吊销，成员卡片上能看全部令牌
@@ -280,7 +279,7 @@ while (true) {
 | 回帖 404 或落错群 | 发消息用 `chatId`；`/api/messages` 才用 `chat` |
 | 建令牌 `400 缺少 member` | 字段是 `member`（handle），不是 `handle` |
 
-老接口 `/api/agent/*`（成员密钥 + 长轮询）仍然保留，给 sidecar 场景用。
+老接口 `/api/agent/*`（成员密钥 + 长轮询）仍然保留，给自建客户端用；DSH 插件和 WorkBuddy 桥走的是上面的 `/v1`。
 
 ---
 
@@ -320,8 +319,7 @@ while (true) {
 ## 开发
 
 ```bash
-npm test          # 185 项自动化测试
-npm run smoke     # 桥 + sidecar + 假 CLI 的完整链路
+npm test          # 243 项自动化测试
 npm run check     # 语法、资源引用、敏感信息扫描
 
 # 一致性测试：任何接入方跑一遍就知道合不合契约
@@ -344,9 +342,8 @@ src/             服务端
   routes/          admin / messages / member-api / channel-api
 plugins/          agent 侧插件（dsh-campfire）
 public/           前端（原生 ES 模块，无构建）
-sidecar/          宿主机客户端 + 自检
 examples/         接入示例
-scripts/          头像生成 / 静态检查 / 端到端冒烟 / 一致性测试
+scripts/          头像生成 / 静态检查 / 一致性测试
 test/             自动化测试
 docs/             方案、交接、探针
 ```

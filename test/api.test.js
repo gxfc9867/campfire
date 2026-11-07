@@ -50,7 +50,7 @@ describe('围炉 API', () => {
   test('创建成员返回一次性明文密钥，列表只给掩码', async () => {
     const { member, key } = await createMember(owner, { handle: 'ruyi', display: '如意' });
     assert.equal(member.handle, 'ruyi');
-    assert.equal(member.driverType, 'cli');
+    assert.equal(member.driverType, 'pull');
     assert.ok(key.length >= 20);
     assert.ok(!JSON.stringify(member).includes(key), '列表视图里不应出现明文密钥');
 
@@ -167,37 +167,30 @@ describe('围炉 API', () => {
     assert.equal(after, before + 1);
   });
 
-  test('记忆摘要可写可读，并出现在提示词里', async () => {
+  test('记忆摘要可写可读', async () => {
     const { key } = await createMember(owner, { handle: 'memo', display: '记事' });
     const member = memberClient(app.base, 'memo', key);
 
     await member.setMemory('主人喜欢先看结论。');
     const got = await member.memory();
     assert.equal(got.data.digest, '主人喜欢先看结论。');
-
-    const p = await member.prompt('main');
-    assert.equal(p.status, 200);
-    assert.ok(p.data.prompt.includes('[人设]'));
-    assert.ok(p.data.prompt.includes('主人喜欢先看结论。'));
-    assert.ok(p.data.prompt.includes('[当前群聊'));
   });
 
-  test('状态上报影响「可唤醒 / 就绪」判定', async () => {
+  test('成员拉一次 inbox 就算在线', async () => {
     const { key } = await createMember(owner, { handle: 'waker', display: '被叫' });
     const member = memberClient(app.base, 'waker', key);
 
-    await member.state({ state: 'warm', running: 0, limit: 2 });
     let s = await owner.get('/api/status?chat=main');
     let found = s.data.members.find((m) => m.handle === 'waker');
-    assert.equal(found.presence.reachable, true);
-    assert.equal(found.presence.ready, false);
-    assert.equal(found.online, 'wakeable');
+    assert.equal(found.presence.reachable, false, '还没拉过，应该不可达');
 
-    await member.state({ state: 'hot', running: 1, limit: 2 });
+    // 拉一次 inbox（长轮询 wait=0 立刻返回），presence 就记上「还活着」
+    await member.inbox(0);
+
     s = await owner.get('/api/status?chat=main');
     found = s.data.members.find((m) => m.handle === 'waker');
-    assert.equal(found.presence.ready, true);
-    assert.equal(found.online, 'ready');
+    assert.equal(found.presence.reachable, true);
+    assert.equal(found.presence.ready, true, '刚拉过就是就绪');
   });
 
   test('归档成员后不再出现在会话成员里，历史消息保留', async () => {

@@ -284,12 +284,7 @@ export function registerAdminRoutes(router, ctx) {
         lastSeenAt: p.lastSeenAt,
         polls: waiters.count(),
         decision,
-        hint:
-          m.driver.type === DRIVER.cli
-            ? p.reachable
-              ? 'sidecar 在线，可以下发唤醒'
-              : 'sidecar 未连接：检查 sidecar 是否启动、桥地址与密钥是否正确'
-            : '该成员由自己主动拉取，桥不负责唤醒',
+        hint: p.reachable ? '该成员在线，可以直接投递' : '该成员由自己主动拉取，桥不负责唤醒',
       });
     },
     { auth: 'owner' },

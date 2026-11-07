@@ -1,5 +1,10 @@
 # 运维
 
+> ⚠️ **本文档部分内容已过时（2026-11-07）**
+> `cli` 驱动与 `sidecar` 已删除——跑命令拿输出没有会话，违反「成员=真实会话」的核心需求。
+> 当前只支持 `pull` / `webhook` / `llm` 三种驱动，详见 [STATUS.md](STATUS.md)。
+> 下面提到 `cli`、`sidecar`、`/api/agent/prompt`、`/api/agent/state` 的地方请按已删除理解。
+
 ## 部署形态
 
 ### 直接跑（WSL / 裸机）

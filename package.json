@@ -10,12 +10,9 @@
     "start": "node --no-warnings src/server.js",
     "dev": "node --no-warnings --watch src/server.js",
     "test": "node --no-warnings --test",
-    "smoke": "node --no-warnings scripts/e2e-smoke.js",
     "check": "node --no-warnings scripts/check.js",
     "avatars": "node --no-warnings scripts/gen-avatars.js",
     "shots": "node --no-warnings scripts/screenshot.js",
-    "sidecar": "node --no-warnings sidecar/sidecar.js",
-    "doctor": "node --no-warnings sidecar/doctor.js",
     "workbuddy": "node --no-warnings src/bridges/workbuddy/run.js"
   },
   "keywords": [
