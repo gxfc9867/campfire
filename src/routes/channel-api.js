@@ -19,7 +19,7 @@ export function registerChannelRoutes(router, ctx) {
     cursor: 'seq',
     wakeup: ['none', 'notify', 'reply'],
     coalesce: { windowMs: 30000, maxItems: 20 },
-    attachments: { maxSize: 0, signedUrlTtl: 0 },
+    attachments: { maxSize: cfg.maxUploadMb * 1024 * 1024, signedUrlTtl: 0 },
     editDelete: true,
     search: { vector: false, keyword: true },
   };
@@ -113,7 +113,11 @@ export function registerChannelRoutes(router, ctx) {
       },
       type: 'text',
       text: msg.text,
-      attachments: [],
+      attachments: (msg.attachments || []).map((a) => ({
+        ...a,
+        // 渠道侧用 /v1/files 下（Bearer 鉴权），浏览器侧才是 /api/files
+        url: `/v1/files/${a.id}`,
+      })),
       replyTo: msg.replyTo || null,
       replyPreview,
       mentions: mentionsOf(msg.text, handle, msg.chatId),
@@ -122,6 +126,35 @@ export function registerChannelRoutes(router, ctx) {
       deletedAt: msg.meta?.deleted ? msg.createdAt : null,
     };
   }
+
+  // ── 附件下载（成员侧）──────────────────────────────────────────────
+  //
+  // 成员拿到 update 里的 attachments[].url 就是这个地址，带上 Bearer 令牌
+  // 直接 GET 就能存到本地。只允许取自己所在会话的附件。
+  router.get(
+    /^\/v1\/files\/([^/]+)$/,
+    (req, res, url, identity, fileId) => {
+      requireScope(identity, 'read');
+      const channel = channelOf(identity);
+      presence?.touch?.(channel.member);
+
+      const row = store.getUpload(fileId);
+      if (!row) throw notFound('文件不存在');
+      assertMemberInChat(channel.member, row.chatId);
+
+      const buf = ctx.uploads?.read(row.path);
+      if (!buf) throw notFound('文件已丢失');
+
+      res.writeHead(200, {
+        'Content-Type': row.mime,
+        'Content-Length': buf.length,
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.name)}`,
+        'X-Content-Type-Options': 'nosniff',
+      });
+      res.end(buf);
+    },
+    { auth: 'channel' },
+  );
 
   // ── 控制指令（停止）──────────────────────────────────────────────
   //

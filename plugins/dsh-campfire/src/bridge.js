@@ -166,6 +166,8 @@ export function createBridge({ client, store, host, config, log = () => {}, slee
       chatId,
       chatTitle: update.chatTitle,
       markerTemplate: config.sourceMarker,
+      // 附件的相对路径要靠基地址拼成完整 URL，agent 才取得到
+      baseUrl: config.baseUrl,
     });
 
     const target = await ensureSession(chatId);

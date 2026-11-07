@@ -1,9 +1,10 @@
 import { MAIN_CHAT, SENDER, JOB_STATUS, DRIVER } from '../constants.js';
 import { badRequest, notFound } from '../errors.js';
-import { readJson, sendJson, prepareStream, createLimiter, clientIp } from '../http/util.js';
+import { readJson, readBody, sendJson, prepareStream, createLimiter, clientIp } from '../http/util.js';
 import { parseTargets } from '../targets.js';
 import { requestStop } from '../control.js';
 import { toMarkdown, toJson, exportBaseName } from '../export.js';
+import { publicAttachment } from '../uploads.js';
 import { shortId } from '../id.js';
 import { computeNextRun, newScheduleId } from '../scheduler.js';
 import { validateCron, describeCron } from '../cron.js';
@@ -140,13 +141,37 @@ export function registerMessageRoutes(router, ctx) {
   // 定时消息调度器要用同一条投递管线：定时消息就是「主人到点发的一条普通消息」
   ctx.deliver = createAndDeliver;
 
-  async function createAndDeliver({ chatId, sender, text, clientId, explicitTargets, replyTo = null }) {
+  async function createAndDeliver({
+    chatId,
+    sender,
+    text,
+    clientId,
+    explicitTargets,
+    replyTo = null,
+    attachmentIds = null,
+  }) {
     const chat = store.getChat(chatId);
     if (!chat) throw notFound('会话不存在');
 
     const body = String(text || '').trim();
-    if (!body) throw badRequest('消息不能为空');
     if (body.length > cfg.maxTextLength) throw badRequest('消息过长');
+
+    // 附件：只认本会话里、还没挂到别的消息上的上传记录
+    let attachments = null;
+    if (Array.isArray(attachmentIds) && attachmentIds.length) {
+      if (attachmentIds.length > 10) throw badRequest('一条消息最多 10 个附件');
+      attachments = [];
+      for (const id of attachmentIds) {
+        const row = store.getUpload(String(id));
+        if (!row) throw badRequest(`附件不存在：${id}`);
+        if (row.chatId !== chatId) throw badRequest('附件不属于这个会话');
+        if (row.messageId) throw badRequest(`附件已经用过了：${id}`);
+        attachments.push(publicAttachment(row));
+      }
+    }
+
+    // 只有附件、没有正文也合法（发张图不打字），但两者不能都空
+    if (!body && !attachments) throw badRequest('消息不能为空');
 
     // 幂等：客户端重试时靠 clientId 去重，避免同一句话出现两次
     if (clientId) {
@@ -154,7 +179,15 @@ export function registerMessageRoutes(router, ctx) {
       if (dup) return { message: dup, jobs: [] };
     }
 
-    const message = store.insertMessage({ chatId, sender, text: body, clientId, replyTo });
+    const message = store.insertMessage({
+      chatId,
+      sender,
+      text: body,
+      clientId,
+      replyTo,
+      attachments,
+    });
+    if (attachments) store.attachUploadsToMessage(attachments.map((a) => a.id), message.id);
     store.touchChat(chatId);
 
     let jobs = [];
@@ -324,6 +357,66 @@ export function registerMessageRoutes(router, ctx) {
         'Cache-Control': 'no-store',
       });
       res.end(md);
+    },
+    { auth: 'owner' },
+  );
+
+  // ── 附件上传与下载 ──────────────────────────────────────────────────
+
+  /**
+   * 上传：裸 body + 自定义头。
+   *
+   * 前端 `fetch('/api/uploads', {method:'POST', body: file, headers:{'x-chat','x-filename','content-type'}})`
+   * 一行就能发。不用 multipart 是因为那要自己写一套解析器，而这里只有一个文件。
+   */
+  router.post(
+    '/api/uploads',
+    async (req, res) => {
+      if (cfg.maxUploadMb <= 0) throw badRequest('附件功能未开启（MAX_UPLOAD_MB=0）');
+      const chatId = String(req.headers['x-chat'] || MAIN_CHAT.id);
+      if (!store.getChat(chatId)) throw notFound('会话不存在');
+
+      let filename = 'file';
+      try {
+        filename = decodeURIComponent(String(req.headers['x-filename'] || 'file'));
+      } catch {
+        // 头里的编码坏了就用默认名，不至于让上传失败
+      }
+      const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
+
+      const buffer = await readBody(req, cfg.maxUploadMb * 1024 * 1024);
+      if (!buffer.length) throw badRequest('文件是空的');
+
+      let saved;
+      try {
+        saved = ctx.uploads.save({ buffer, filename, mime, chatId, uploader: SENDER.user });
+      } catch (error) {
+        throw badRequest(error.message);
+      }
+      const row = store.createUpload(saved);
+      log.info?.(`附件已上传 ${row.id}（${row.name}，${row.size} 字节）→ ${chatId}`);
+      sendJson(res, 201, { attachment: publicAttachment(row) });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 下载：主人 cookie 鉴权，浏览器 <img> 会自动带。 */
+  router.get(
+    /^\/api\/files\/([^/]+)$/,
+    (req, res, url, identity, id) => {
+      const row = store.getUpload(id);
+      if (!row) throw notFound('文件不存在');
+      const buf = ctx.uploads.read(row.path);
+      if (!buf) throw notFound('文件已丢失');
+
+      res.writeHead(200, {
+        'Content-Type': row.mime,
+        'Content-Length': buf.length,
+        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(row.name)}`,
+        'Cache-Control': 'private, max-age=86400',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      res.end(buf);
     },
     { auth: 'owner' },
   );
@@ -531,6 +624,7 @@ export function registerMessageRoutes(router, ctx) {
         clientId: body.clientId,
         explicitTargets: body.targets,
         replyTo: quote,
+        attachmentIds: body.attachmentIds,
       });
       sendJson(res, 200, {
         message,

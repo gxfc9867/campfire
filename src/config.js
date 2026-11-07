@@ -186,6 +186,9 @@ const config = {
   maxTextLength: int('MAX_TEXT', 32000, 100, 200_000),
   maxChatNameLength: 40,
 
+  /** 附件：单文件上限（MB），默认 25。设 0 关闭上传。 */
+  maxUploadMb: int('MAX_UPLOAD_MB', 25, 0, 200),
+
   /** 成员清单里允许的最大群数，避免误传超大数组。 */
   maxChatsPerMember: 50,
 };

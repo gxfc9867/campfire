@@ -23,15 +23,26 @@ export function sourceMarker({ chatId, chatTitle, senderDisplay, senderHandle },
   return fillTemplate(template, { chat, chatId, sender, handle: senderHandle ?? '' });
 }
 
-function attachmentLines(attachments) {
+function attachmentLines(attachments, baseUrl = '') {
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  const base = String(baseUrl || '').replace(/\/+$/, '');
   return attachments.map((item) => {
     const name = item?.name ?? item?.id ?? '未命名附件';
     const mime = item?.mime ?? 'application/octet-stream';
-    const size = Number.isFinite(item?.size) ? `${item.size}B` : '未知大小';
-    const url = item?.url ? ` ${item.url}` : '';
-    return `[附件] ${name} (${mime}, ${size})${url}`;
+    const size = Number.isFinite(item?.size) ? formatBytes(item.size) : '未知大小';
+    // 围炉给的是相对路径；拼上基地址 agent 才真的能去取
+    const rel = item?.url || (item?.id ? `/v1/files/${item.id}` : '');
+    const url = rel ? ` ${base}${rel}` : '';
+    const sizeHint = item?.width && item?.height ? ` ${item.width}×${item.height}` : '';
+    return `[附件] ${name} (${mime}, ${size}${sizeHint})${url}`;
   });
+}
+
+function formatBytes(n) {
+  const size = Number(n) || 0;
+  if (size < 1024) return `${size}B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`;
+  return `${(size / 1024 / 1024).toFixed(1)}MB`;
 }
 
 /**
@@ -41,7 +52,7 @@ function attachmentLines(attachments) {
  * 引用行不能省：围炉里点「引用」看着像那么回事，但如果投递时只带 replyTo 这个 id，
  * agent 根本不知道被引用的是哪句话，等于引用只对自己可见。
  */
-export function renderInboundMessage({ message, chatId, chatTitle, markerTemplate } = {}) {
+export function renderInboundMessage({ message, chatId, chatTitle, markerTemplate, baseUrl = '' } = {}) {
   const sender = message?.sender ?? {};
   const marker = sourceMarker(
     {
@@ -68,7 +79,7 @@ export function renderInboundMessage({ message, chatId, chatTitle, markerTemplat
   }
 
   lines.push(`${marker} ${text}`.trimEnd());
-  lines.push(...attachmentLines(message?.attachments));
+  lines.push(...attachmentLines(message?.attachments, baseUrl));
   if (truncated) lines.push(`[已截断] 原文超过 ${MAX_INBOUND_CHARS} 字，只投递前 ${MAX_INBOUND_CHARS} 字`);
   return lines.join('\n');
 }

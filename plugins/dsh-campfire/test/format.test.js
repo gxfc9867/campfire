@@ -43,16 +43,30 @@ test('renderInboundMessage 把附件元数据补成独立行', () => {
       text: '看图',
       sender: { handle: 'gongxi', display: '恭喜' },
       attachments: [
-        { id: 'att_1', name: 'a.png', mime: 'image/png', size: 18342, url: 'https://x/s/1' },
+        { id: 'att_1', name: 'a.png', mime: 'image/png', size: 18342, url: '/v1/files/att_1', width: 800, height: 600 },
         { id: 'att_2' },
       ],
     },
     chatId: 'main',
+    baseUrl: 'https://x',
   });
   const lines = text.split('\n');
   assert.equal(lines[0], '[来自围炉/群 main/成员 恭喜] 看图');
-  assert.match(lines[1], /^\[附件\] a\.png \(image\/png, 18342B\) https:\/\/x\/s\/1$/);
-  assert.match(lines[2], /^\[附件\] att_2 \(application\/octet-stream, 未知大小\)$/);
+  // 相对路径要靠 baseUrl 拼成完整地址，agent 才取得到；顺带带上宽高
+  assert.match(lines[1], /^\[附件\] a\.png \(image\/png, 17\.9KB 800×600\) https:\/\/x\/v1\/files\/att_1$/);
+  assert.match(lines[2], /^\[附件\] att_2 \(application\/octet-stream, 未知大小\) https:\/\/x\/v1\/files\/att_2$/);
+});
+
+test('renderInboundMessage 没给 baseUrl 时附件只留相对路径', () => {
+  const text = renderInboundMessage({
+    message: {
+      text: '看图',
+      sender: { handle: 'gongxi', display: '恭喜' },
+      attachments: [{ id: 'att_9', name: 'b.png', mime: 'image/png', size: 100 }],
+    },
+    chatId: 'main',
+  });
+  assert.match(text, /https?:|\[附件\] b\.png .* \/v1\/files\/att_9/);
 });
 
 test('renderInboundMessage 支持自定义标记模板', () => {

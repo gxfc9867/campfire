@@ -48,8 +48,27 @@ export function sendError(res, err) {
  * 读取并解析 JSON 请求体。
  * 必须有上限：没有上限的 readJson 是一个内存耗尽漏洞。
  */
-export async function readJson(req, maxBytes = 64 * 1024) {
+/**
+ * 读原始请求体（上传用）。
+ *
+ * 附件走「裸 body + 自定义头」而不是 multipart：前端 `fetch(url, {body: file})`
+ * 一行就能发，服务端也不用写一遍 multipart 解析器。文件名和类型放在
+ * X-Filename / Content-Type 里。
+ */
+export async function readBody(req, maxBytes = 25 * 1024 * 1024) {
   const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      throw new AppError(413, 'payload_too_large', `文件超过 ${Math.round(maxBytes / 1024 / 1024)} MB`);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+export async function readJson(req, maxBytes = 64 * 1024) {  const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;

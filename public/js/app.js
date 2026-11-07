@@ -50,6 +50,8 @@ const state = {
   query: '',
   tab: 'all', // all | mentions
   es: null,
+  pendingAttachments: [], // 还没发出去的附件
+  uploading: 0,
   mentionIndex: 0,
   mentionItems: [],
   mentionQuery: '',
@@ -1069,6 +1071,47 @@ function buildDeliveryStatus(m) {
   return `<div class="msg-delivery">${parts.join('　·　')}</div>`;
 }
 
+/**
+ * 消息里的附件：图片直接铺开（点击原图新窗口），其他做成文件卡片。
+ * 用 width/height 占位，图片加载前不会把消息列表顶得跳来跳去。
+ */
+function renderAttachments(list) {
+  if (!Array.isArray(list) || !list.length) return '';
+  const images = list.filter((a) => a.isImage);
+  const files = list.filter((a) => !a.isImage);
+
+  let html = '';
+  if (images.length) {
+    html +=
+      '<div class="msg-images">' +
+      images
+        .map(
+          (a) =>
+            `<a class="msg-image" href="${esc(a.url)}" target="_blank" rel="noopener">` +
+            `<img src="${esc(a.url)}" alt="${esc(a.name)}" loading="lazy"` +
+            (a.width && a.height ? ` width="${a.width}" height="${a.height}"` : '') +
+            `></a>`,
+        )
+        .join('') +
+      '</div>';
+  }
+  if (files.length) {
+    html +=
+      '<div class="msg-files">' +
+      files
+        .map(
+          (a) =>
+            `<a class="msg-file" href="${esc(a.url)}" download="${esc(a.name)}">` +
+            `<span class="msg-file-name">${esc(a.name)}</span>` +
+            `<span class="msg-file-size">${fmtBytes(a.size)}</span>` +
+            `</a>`,
+        )
+        .join('') +
+      '</div>';
+  }
+  return html;
+}
+
 function buildMessage(m) {
   const wrap = document.createElement('div');
   const isMe = m.sender === 'user';
@@ -1110,7 +1153,10 @@ function buildMessage(m) {
       : '') +
     (m.meta?.deleted
       ? '<div class="msg-text msg-deleted">消息已删除</div>'
-      : `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`) +
+      : renderAttachments(m.attachments) +
+        (String(m.text || '').trim()
+          ? `<div class="msg-text">${renderMarkdown(m.text, { members: state.members })}</div>`
+          : '')) +
     buildDeliveryStatus(m);
 
   if (quoted) {
@@ -1235,6 +1281,41 @@ function bindComposer() {
   input.addEventListener('input', () => {
     autosize();
     updateMentionMenu();
+    syncSendButton();
+  });
+
+  // ── 附件：点按钮选 / 拖进来 / 直接粘贴 ──
+  const fileInput = $('#file-input');
+  $('#btn-attach').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const files = fileInput.files;
+    fileInput.value = ''; // 允许连续选同一个文件
+    await uploadFiles(files);
+  });
+
+  const composerEl = $('#composer');
+  composerEl.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    composerEl.classList.add('is-dragover');
+  });
+  composerEl.addEventListener('dragleave', (e) => {
+    // 只在真正离开 composer 时取消高亮，避免子元素来回触发
+    if (composerEl.contains(e.relatedTarget)) return;
+    composerEl.classList.remove('is-dragover');
+  });
+  composerEl.addEventListener('drop', async (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    composerEl.classList.remove('is-dragover');
+    await uploadFiles(e.dataTransfer.files);
+  });
+
+  input.addEventListener('paste', async (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length) return;
+    e.preventDefault(); // 有文件时别把路径当文字粘进输入框
+    await uploadFiles(files);
   });
 
   input.addEventListener('keydown', (e) => {
@@ -1266,14 +1347,21 @@ function bindComposer() {
 
   async function submit() {
     const text = input.value.trim();
-    if (!text) return;
+    const attachmentIds = state.pendingAttachments.map((a) => a.id);
+    if (!text && !attachmentIds.length) return;
+    if (state.uploading > 0) {
+      toast('还有附件正在上传，稍等一下');
+      return;
+    }
     send.disabled = true;
     const clientId = randomId();
     const quote = state.quoting?.id || null;
     try {
-      const res = await api.send(state.chatId, text, clientId, quote);
+      const res = await api.send(state.chatId, text, clientId, quote, attachmentIds);
       input.value = '';
       clearQuote();
+      state.pendingAttachments = [];
+      renderAttachBar();
       autosize();
       appendMessage(res.message);
       hintWaking(res.jobs);
@@ -1283,6 +1371,101 @@ function bindComposer() {
       send.disabled = false;
     }
   }
+}
+
+// ── 附件上传 ────────────────────────────────────────────────────────
+
+/** 把选中的文件逐个传上去，成功的进 pendingAttachments，等发送时一起带上。 */
+async function uploadFiles(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  for (const file of list) {
+    if (file.size > 25 * 1024 * 1024) {
+      toast(`${file.name} 超过 25 MB，先别发了`);
+      continue;
+    }
+    state.uploading += 1;
+    renderAttachBar();
+    try {
+      const att = await api.uploadFile(file, state.chatId);
+      state.pendingAttachments.push(att);
+    } catch (ex) {
+      toast(ex instanceof ApiError ? ex.message : `${file.name} 上传失败`);
+    } finally {
+      state.uploading -= 1;
+      renderAttachBar();
+    }
+  }
+  syncSendButton();
+}
+
+/** 待发送附件栏：图片显示缩略图，其他显示文件名，都能单独移除。 */
+function renderAttachBar() {
+  const bar = $('#attach-bar');
+  if (!bar) return;
+  const items = state.pendingAttachments;
+  if (!items.length && !state.uploading) {
+    bar.hidden = true;
+    bar.textContent = '';
+    return;
+  }
+  bar.hidden = false;
+  bar.textContent = '';
+
+  for (const a of items) {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+
+    if (a.isImage) {
+      const img = document.createElement('img');
+      img.src = a.url;
+      img.alt = a.name;
+      img.loading = 'lazy';
+      chip.append(img);
+    }
+
+    const name = document.createElement('span');
+    name.className = 'attach-name';
+    name.textContent = a.name;
+    name.title = `${a.name} · ${fmtBytes(a.size)}`;
+    chip.append(name);
+
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'attach-remove';
+    rm.textContent = '×';
+    rm.setAttribute('aria-label', `移除 ${a.name}`);
+    rm.addEventListener('click', () => {
+      state.pendingAttachments = state.pendingAttachments.filter((p) => p.id !== a.id);
+      renderAttachBar();
+      syncSendButton();
+    });
+    chip.append(rm);
+    bar.append(chip);
+  }
+
+  if (state.uploading > 0) {
+    const sp = document.createElement('span');
+    sp.className = 'attach-chip is-uploading';
+    sp.textContent = `上传中 ${state.uploading}…`;
+    bar.append(sp);
+  }
+}
+
+function fmtBytes(n) {
+  const size = Number(n) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 发送按钮可用性：有文字或有附件，且没有正在上传的。 */
+function syncSendButton() {
+  const send = $('#btn-send');
+  const input = $('#input');
+  if (!send || !input) return;
+  const hasContent = input.value.trim().length > 0 || state.pendingAttachments.length > 0;
+  send.disabled = !hasContent || state.uploading > 0;
 }
 
 /** 投递给了「可唤醒」的成员时，明确告诉用户要等几秒，而不是让界面看起来没反应。 */

@@ -58,8 +58,11 @@ export const api = {
     const q = new URLSearchParams({ chat: chatId, ...params });
     return request(`/api/messages?${q}`);
   },
-  send: (chatId, text, clientId, quote = null) =>
-    request('/api/messages', { method: 'POST', body: { chat: chatId, text, clientId, quote } }),
+  send: (chatId, text, clientId, quote = null, attachmentIds = null) =>
+    request('/api/messages', {
+      method: 'POST',
+      body: { chat: chatId, text, clientId, quote, attachmentIds },
+    }),
   editMessage: (id, text) => request(`/api/messages/${id}`, { method: 'PATCH', body: { text } }),
   deleteMessage: (id) => request(`/api/messages/${id}`, { method: 'DELETE' }),
   /** 让正在跑这一轮的成员中断生成（对标 DSH 会话里的「停止」）。 */
@@ -67,6 +70,22 @@ export const api = {
   /** 会话导出地址：用 <a download> 直接打开，靠 cookie 鉴权。 */
   exportChatUrl: (id, format = 'md') =>
     `/api/chats/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
+
+  // 附件
+  uploadFile: async (file, chat) => {
+    const res = await fetch('/api/uploads', {
+      method: 'POST',
+      headers: {
+        'x-chat': chat,
+        'x-filename': encodeURIComponent(file.name || 'file'),
+        'content-type': file.type || 'application/octet-stream',
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, data.code || 'upload_failed', data.message || `上传失败（HTTP ${res.status}）`);
+    return data.attachment;
+  },
 
   // 定时消息
   schedules: (chat) => request(`/api/schedules${chat ? `?chat=${encodeURIComponent(chat)}` : ''}`),

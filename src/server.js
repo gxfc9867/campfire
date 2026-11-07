@@ -23,6 +23,7 @@ import { registerMemberRoutes } from './routes/member-api.js';
 import { registerChannelRoutes } from './routes/channel-api.js';
 import { registerMcpRoutes } from './mcp/mount.js';
 import { startScheduler } from './scheduler.js';
+import { Uploads } from './uploads.js';
 
 const log = logger.child('server');
 
@@ -46,6 +47,12 @@ export function createApp(overrides = {}) {
   const hub = new EventHub();
   const channels = new Channels({ store, members });
   const auth = new Auth({ config: cfg, members, channels });
+  // 附件存储：maxUploadMb = 0 表示关闭上传（老部署不想开就不开）
+  const uploads = new Uploads({
+    dataDir: cfg.dataDir,
+    maxBytes: Math.max(0, cfg.maxUploadMb) * 1024 * 1024,
+    log: logger.child('uploads'),
+  });
 
   const ctx = {
     cfg,
@@ -57,6 +64,7 @@ export function createApp(overrides = {}) {
     hub,
     auth,
     channels,
+    uploads,
     // 摘要 + 向量检索（M5）。没配模型时两个能力都是 null，调用方据此降级，不报错。
     memoryService: createMemoryService({ store, log: logger.child('memory') }),
     log: logger.child('app'),

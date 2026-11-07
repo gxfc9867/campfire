@@ -97,6 +97,35 @@ export const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 6,
+    name: 'message_attachments',
+    up(db) {
+      // 附件元数据存 messages.attachments（JSON 数组），文件本体在 data/uploads/
+      const cols = db.prepare('PRAGMA table_info(messages)').all();
+      if (!cols.some((c) => c.name === 'attachments')) {
+        db.exec('ALTER TABLE messages ADD COLUMN attachments TEXT');
+      }
+      // 上传记录：谁传的、属于哪个会话、什么时候过期（孤儿文件清理用）
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS uploads (
+          id          TEXT PRIMARY KEY,
+          chat_id     TEXT NOT NULL,
+          uploader    TEXT NOT NULL,
+          name        TEXT NOT NULL,
+          mime        TEXT NOT NULL,
+          size        INTEGER NOT NULL,
+          path        TEXT NOT NULL,
+          width       INTEGER,
+          height      INTEGER,
+          created_at  INTEGER NOT NULL,
+          message_id  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_uploads_chat ON uploads(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_uploads_orphan ON uploads(created_at) WHERE message_id IS NULL;
+      `);
+    },
+  },
 ];
 
 export function currentVersion(db) {

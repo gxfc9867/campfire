@@ -126,9 +126,18 @@
             </button>
           </div>
           <div class="mention-menu" id="mention-menu" hidden></div>
+          <div class="attach-bar" id="attach-bar" hidden></div>
           <div class="composer-box">
             <textarea id="input" rows="1" placeholder="说点什么，@ 可以叫醒成员" aria-label="消息输入"></textarea>
             <div class="composer-bar">
+              <div class="composer-tools">
+                <button type="button" class="icon-btn sm" id="btn-attach" title="添加图片或文件" aria-label="添加附件">
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M10 4v12M4 10h12" />
+                  </svg>
+                </button>
+                <input type="file" id="file-input" multiple hidden />
+              </div>
               <span class="hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
               <button class="send-btn" type="submit" id="btn-send" disabled>
                 <span>发送</span>

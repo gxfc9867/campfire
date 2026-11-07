@@ -251,15 +251,36 @@ export class Store {
    * 写一条消息。
    * 显式开事务：后面还要建投递任务，两者必须一起成功或一起回滚。
    */
-  insertMessage({ id, chatId, sender, text, clientId = null, replyTo = null, jobId = null, meta = null }) {
+  insertMessage({
+    id,
+    chatId,
+    sender,
+    text,
+    clientId = null,
+    replyTo = null,
+    jobId = null,
+    meta = null,
+    attachments = null,
+  }) {
     const now = Date.now();
     const msgId = id || shortId('m_');
     this.db
       .prepare(
-        `INSERT INTO messages (id, chat_id, sender, text, created_at, client_id, reply_to, job_id, meta)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, chat_id, sender, text, created_at, client_id, reply_to, job_id, meta, attachments)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(msgId, chatId, sender, text, now, clientId, replyTo, jobId, meta ? JSON.stringify(meta) : null);
+      .run(
+        msgId,
+        chatId,
+        sender,
+        text,
+        now,
+        clientId,
+        replyTo,
+        jobId,
+        meta ? JSON.stringify(meta) : null,
+        Array.isArray(attachments) && attachments.length ? JSON.stringify(attachments) : null,
+      );
     const row = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
     return mapMessage(row);
   }
@@ -344,6 +365,44 @@ export class Store {
       .prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY seq ASC')
       .all(chatId);
     return rows.map(mapMessage);
+  }
+
+  // ── 附件上传记录 ────────────────────────────────────────────────────
+
+  createUpload({ id, chatId, uploader, name, mime, size, path: filePath, width = null, height = null }) {
+    this.db
+      .prepare(
+        `INSERT INTO uploads (id, chat_id, uploader, name, mime, size, path, width, height, created_at, message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      )
+      .run(id, chatId, uploader, name, mime, size, filePath, width, height, Date.now());
+    return this.getUpload(id);
+  }
+
+  getUpload(id) {
+    const row = this.db.prepare('SELECT * FROM uploads WHERE id = ?').get(id);
+    return row ? mapUpload(row) : null;
+  }
+
+  /** 把上传挂到具体消息上，之后孤儿清理就不会动它。 */
+  attachUploadsToMessage(ids, messageId) {
+    if (!Array.isArray(ids) || !ids.length) return 0;
+    const stmt = this.db.prepare('UPDATE uploads SET message_id = ? WHERE id = ? AND message_id IS NULL');
+    let n = 0;
+    for (const id of ids) n += stmt.run(messageId, id).changes;
+    return n;
+  }
+
+  /** 孤儿：传了但没发出去（用户中途放弃），超过一定时间就可以清掉。 */
+  listOrphanUploads(beforeMs, limit = 200) {
+    const rows = this.db
+      .prepare('SELECT * FROM uploads WHERE message_id IS NULL AND created_at < ? ORDER BY created_at ASC LIMIT ?')
+      .all(beforeMs, limit);
+    return rows.map(mapUpload);
+  }
+
+  deleteUploadRecord(id) {
+    return this.db.prepare('DELETE FROM uploads WHERE id = ?').run(id).changes > 0;
   }
 
   // ── 定时消息 ────────────────────────────────────────────────────────
@@ -746,6 +805,7 @@ function mapMessage(r) {
     replyTo: r.reply_to,
     jobId: r.job_id,
     meta: r.meta ? safeJson(r.meta) : null,
+    attachments: r.attachments ? safeJson(r.attachments) : null,
   };
 }
 
@@ -766,8 +826,23 @@ function mapJob(r) {
   };
 }
 
-function mapSchedule(r) {
+function mapUpload(r) {
   return {
+    id: r.id,
+    chatId: r.chat_id,
+    uploader: r.uploader,
+    name: r.name,
+    mime: r.mime,
+    size: r.size,
+    path: r.path,
+    width: r.width,
+    height: r.height,
+    createdAt: r.created_at,
+    messageId: r.message_id,
+  };
+}
+
+function mapSchedule(r) {  return {
     id: r.id,
     chatId: r.chat_id,
     cron: r.cron,
