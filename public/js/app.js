@@ -197,6 +197,17 @@ function bindChrome() {
   });
   $('#schedule-form').addEventListener('submit', submitSchedule);
 
+  // 收件箱
+  $('#btn-inbox').addEventListener('click', openInbox);
+  $('#btn-close-inbox').addEventListener('click', closeInbox);
+  $('#inbox-view').addEventListener('click', (e) => {
+    if (e.target === $('#inbox-view')) closeInbox();
+  });
+  $('#btn-inbox-clear').addEventListener('click', markAllInboxRead);
+  // 启动先刷一次，之后每分钟对一次表（红点不值得开长连接）
+  refreshInboxBadge();
+  setInterval(refreshInboxBadge, 60_000);
+
   // 搜索消息弹窗
   $('#btn-close-search').addEventListener('click', closeSearch);
   $('#search-view').addEventListener('click', (e) => {
@@ -319,6 +330,123 @@ async function openChatMenu(chat, x, y) {
   if (act === '归档群聊' || act === '归档单聊') return archiveChat(chat);
   if (act === '解散群聊') return dissolveChat(chat);
   if (act === '删除单聊') return removeDm(chat);
+}
+
+// ── 收件箱 ──────────────────────────────────────────────────────────
+
+/** 只刷红点：轮询和收到新消息时都调它，代价很小。 */
+async function refreshInboxBadge() {
+  try {
+    const data = await api.inbox({ limit: 1 });
+    const badge = $('#inbox-badge');
+    if (!badge) return;
+    if (data.unread > 0) {
+      badge.textContent = data.unread > 99 ? '99+' : String(data.unread);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  } catch {
+    // 拉不到就不显示，别弹错误打断用户
+  }
+}
+
+async function openInbox() {
+  const box = $('#inbox-view');
+  if (!box) return;
+  box.hidden = false;
+  requestAnimationFrame(() => box.classList.add('is-open'));
+  await loadInbox();
+}
+
+function closeInbox() {
+  const box = $('#inbox-view');
+  if (!box) return;
+  box.classList.remove('is-open');
+  setTimeout(() => {
+    box.hidden = true;
+  }, 160);
+}
+
+async function loadInbox() {
+  const list = $('#inbox-list');
+  if (!list) return;
+  list.innerHTML = '<p class="empty-note">加载中…</p>';
+  try {
+    const data = await api.inbox({ limit: 50 });
+    renderInbox(data);
+    // 打开就算看过了：红点立刻消掉，但条目保留 unread 标记直到下次刷新
+    if (data.unread > 0) {
+      const newest = data.items.find((i) => i.unread);
+      await api.markInboxSeen(newest?.message?.createdAt || Date.now());
+      const badge = $('#inbox-badge');
+      if (badge) badge.hidden = true;
+    }
+  } catch (ex) {
+    list.innerHTML = `<p class="empty-note">读取失败：${esc(ex.message)}</p>`;
+  }
+}
+
+function renderInbox(data) {
+  const list = $('#inbox-list');
+  if (!list) return;
+  list.textContent = '';
+
+  if (!data.items.length) {
+    list.innerHTML = '<p class="empty-note">没有需要你处理的事</p>';
+    return;
+  }
+
+  for (const item of data.items) {
+    const m = item.message;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `inbox-item${item.unread ? ' is-unread' : ''}${item.kind === 'system' ? ' is-system' : ''}`;
+
+    const head = document.createElement('div');
+    head.className = 'inbox-head';
+    const tag = document.createElement('span');
+    tag.className = 'inbox-tag';
+    tag.textContent = item.kind === 'system' ? '系统' : '@我';
+    const chat = document.createElement('span');
+    chat.className = 'inbox-chat';
+    chat.textContent = item.chatName;
+    const who = document.createElement('span');
+    who.className = 'inbox-who';
+    who.textContent = m.sender === 'system' ? '' : nameOf(m.sender);
+    const time = document.createElement('span');
+    time.className = 'inbox-time';
+    time.textContent = new Date(m.createdAt).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    head.append(tag, chat, who, time);
+
+    const text = document.createElement('div');
+    text.className = 'inbox-text';
+    text.textContent = String(m.text || '（无正文）').slice(0, 200);
+
+    row.append(head, text);
+    row.addEventListener('click', () => {
+      closeInbox();
+      jumpToMessage(m);
+    });
+    list.append(row);
+  }
+}
+
+async function markAllInboxRead() {
+  try {
+    await api.markInboxSeen();
+    const badge = $('#inbox-badge');
+    if (badge) badge.hidden = true;
+    await loadInbox();
+    toast('已全部标为已读');
+  } catch (ex) {
+    toast(ex.message);
+  }
 }
 
 // ── 搜索消息 ────────────────────────────────────────────────────────

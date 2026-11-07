@@ -367,6 +367,52 @@ export class Store {
     return rows.map(mapMessage);
   }
 
+  // ── 收件箱 ──────────────────────────────────────────────────────────
+
+  /**
+   * 「需要我处理的事」聚合。
+   *
+   * 只收两类，都是有明确结构化标记、不靠自然语言猜的：
+   * 1. 成员在群里 @ 了我（meta.mentionsOwner，由渠道/webhook 写入时判定）
+   * 2. 系统告警（sender = 'system'：投递失败、会话丢失、接力到顶等）
+   *
+   * 投递中的「等待中」不进收件箱——它每一秒都在变，放进来只会变成噪音，
+   * 消息下方那行小字已经够用了。
+   */
+  listInbox({ since = 0, limit = 50 } = {}) {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages
+          WHERE (sender = 'system' OR json_extract(meta, '$.mentionsOwner') = 1)
+            AND created_at > ?
+          ORDER BY created_at DESC
+          LIMIT ?`,
+      )
+      .all(Number(since) || 0, Math.min(Math.max(Number(limit) || 50, 1), 200));
+    return rows.map(mapMessage);
+  }
+
+  /** 收件箱里有多少条没看过的。 */
+  countInboxUnread(since = 0) {
+    return this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM messages
+          WHERE (sender = 'system' OR json_extract(meta, '$.mentionsOwner') = 1)
+            AND created_at > ?`,
+      )
+      .get(Number(since) || 0).n;
+  }
+
+  getInboxSeenAt() {
+    const v = this.getKV('inbox_seen_at', '0');
+    return Number(v) || 0;
+  }
+
+  setInboxSeenAt(ts = Date.now()) {
+    this.setKV('inbox_seen_at', String(Number(ts) || Date.now()));
+    return this.getInboxSeenAt();
+  }
+
   // ── 全文搜索 ────────────────────────────────────────────────────────
 
   /**

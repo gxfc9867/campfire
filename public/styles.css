@@ -2200,6 +2200,97 @@ select.invalid {
   background: rgba(196, 67, 58, 0.08);
 }
 
+/* ── 收件箱 ─────────────────────────────────────────────────────── */
+.rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.rail-btn {
+  position: relative;
+}
+
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inbox-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.inbox-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.inbox-item.is-unread {
+  border-left: 3px solid var(--accent);
+}
+
+.inbox-item.is-system {
+  background: var(--bg-sunken);
+}
+
+.inbox-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.inbox-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-size: 10.5px;
+}
+
+.inbox-item.is-unread .inbox-tag {
+  background: var(--accent);
+  color: #fff;
+}
+
+.inbox-chat {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.inbox-time {
+  margin-left: auto;
+}
+
+.inbox-text {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* ── 搜索消息 ───────────────────────────────────────────────────── */
 .search-scope {
   display: inline-flex;

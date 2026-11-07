@@ -361,6 +361,50 @@ export function registerMessageRoutes(router, ctx) {
     { auth: 'owner' },
   );
 
+  // ── 收件箱 ──────────────────────────────────────────────────────────
+
+  /**
+   * 「需要我处理的事」：成员 @ 我 + 系统告警。
+   * 只收有结构化标记的，不靠自然语言猜；投递中的等待状态不进这里。
+   */
+  router.get(
+    '/api/inbox',
+    (req, res, url) => {
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+      const sinceRaw = Number(url.searchParams.get('since'));
+      const seenAt = Number.isFinite(sinceRaw) && sinceRaw > 0 ? sinceRaw : store.getInboxSeenAt();
+
+      const items = store.listInbox({ since: 0, limit }).map((m) => {
+        const chat = store.getChat(m.chatId);
+        return {
+          message: m,
+          chatName: chat?.name || m.chatId,
+          kind: m.sender === SENDER.system ? 'system' : 'mention',
+          unread: m.createdAt > seenAt,
+        };
+      });
+
+      sendJson(res, 200, {
+        seenAt,
+        unread: store.countInboxUnread(seenAt),
+        items,
+      });
+    },
+    { auth: 'owner' },
+  );
+
+  /** 标记收件箱已读到某个时刻（默认当前）。 */
+  router.post(
+    '/api/inbox/seen',
+    async (req, res) => {
+      const body = await readJson(req, 4096);
+      const at = Number(body.at);
+      const seenAt = store.setInboxSeenAt(Number.isFinite(at) && at > 0 ? at : Date.now());
+      sendJson(res, 200, { ok: true, seenAt });
+    },
+    { auth: 'owner' },
+  );
+
   // ── 全文搜索 ────────────────────────────────────────────────────────
 
   /** HTML 转义：搜索结果要嵌进 innerHTML，用户搜的内容必须当纯文本处理。 */

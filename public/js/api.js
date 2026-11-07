@@ -71,6 +71,11 @@ export const api = {
   exportChatUrl: (id, format = 'md') =>
     `/api/chats/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
 
+  // 收件箱
+  inbox: ({ limit = 50 } = {}) => request(`/api/inbox?limit=${limit}`),
+  markInboxSeen: (at = null) =>
+    request('/api/inbox/seen', { method: 'POST', body: at ? { at } : {} }),
+
   // 搜索
   search: ({ q, chat = null, limit = 30 }) => {
     const params = new URLSearchParams({ q, limit: String(limit) });

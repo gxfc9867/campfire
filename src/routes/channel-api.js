@@ -1,6 +1,6 @@
 import { readJson, sendJson } from '../http/util.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { SENDER } from '../constants.js';
+import { SENDER, MENTION_OWNER_RE } from '../constants.js';
 import { takeStop } from '../control.js';
 import { parseTargets } from '../targets.js';
 
@@ -275,7 +275,12 @@ export function registerChannelRoutes(router, ctx) {
         text,
         clientId: clientMsgId,
         replyTo: body.replyTo ? String(body.replyTo) : null,
-        meta: { via: 'v1', channelId: channel.id },
+        meta: {
+          via: 'v1',
+          channelId: channel.id,
+          // 「@我」的结构化判定：前端收件箱靠这个标记聚合，不用自然语言猜
+          mentionsOwner: MENTION_OWNER_RE.test(text) || false,
+        },
       });
       store.touchChat(chatId);
       hub.emit('change', { type: 'message', chatId });

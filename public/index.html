@@ -30,6 +30,13 @@
             <path d="M14 6.5a2.6 2.6 0 0 1 0 5M15.5 16c-.2-1.4-.7-2.5-1.5-3.2" />
           </svg>
         </button>
+        <button class="rail-btn" id="btn-inbox" title="收件箱" aria-label="收件箱">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 2.5a5 5 0 0 0-5 5v3.2L3.5 14h13L15 10.7V7.5a5 5 0 0 0-5-5Z" />
+            <path d="M8 16a2 2 0 0 0 4 0" />
+          </svg>
+          <span class="rail-badge" id="inbox-badge" hidden></span>
+        </button>
         <div class="rail-gap"></div>
         <button class="rail-btn" id="btn-theme" title="切换主题" aria-label="切换主题">
           <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -204,6 +211,24 @@
             <summary>已归档成员 <span class="archive-count" id="archived-members-count"></span></summary>
             <div class="archive-list" id="archived-members-list"></div>
           </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- 收件箱 -->
+    <div class="overlay overlay-sheet" id="inbox-view" hidden>
+      <div class="sheet sheet-narrow">
+        <header class="sheet-head">
+          <h2>收件箱</h2>
+          <div class="sheet-head-actions">
+            <button class="ghost-btn" id="btn-inbox-clear" type="button">全部已读</button>
+            <button class="icon-btn" id="btn-close-inbox" aria-label="关闭">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+            </button>
+          </div>
+        </header>
+        <div class="sheet-body">
+          <div class="inbox-list" id="inbox-list"></div>
         </div>
       </div>
     </div>
