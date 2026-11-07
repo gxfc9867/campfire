@@ -197,6 +197,28 @@ function bindChrome() {
   });
   $('#schedule-form').addEventListener('submit', submitSchedule);
 
+  // 搜索消息弹窗
+  $('#btn-close-search').addEventListener('click', closeSearch);
+  $('#search-view').addEventListener('click', (e) => {
+    if (e.target === $('#search-view')) closeSearch();
+  });
+  const searchInput = $('#search-input');
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(runSearch, 260);
+  });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(searchTimer);
+      runSearch();
+    }
+    if (e.key === 'Escape') closeSearch();
+  });
+  $('#search-current-chat').addEventListener('change', () => {
+    if ($('#search-input').value.trim()) runSearch();
+  });
+
   // 右侧栏分段：成员 / 投递
   $$('.aside-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -220,6 +242,16 @@ function bindChrome() {
   $('#chat-search').addEventListener('input', (e) => {
     state.query = e.target.value.trim().toLowerCase();
     renderChats();
+  });
+  // 回车进「搜消息」：会话过滤是即时的，搜消息是另一件事
+  $('#chat-search').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const q = e.target.value.trim();
+    e.target.value = '';
+    state.query = '';
+    renderChats();
+    openSearch(q);
   });
 
   // 图标栏的成员入口与左栏底部按钮等价
@@ -287,6 +319,140 @@ async function openChatMenu(chat, x, y) {
   if (act === '归档群聊' || act === '归档单聊') return archiveChat(chat);
   if (act === '解散群聊') return dissolveChat(chat);
   if (act === '删除单聊') return removeDm(chat);
+}
+
+// ── 搜索消息 ────────────────────────────────────────────────────────
+
+let searchTimer = null;
+
+async function openSearch(initial = '') {
+  const box = $('#search-view');
+  if (!box) return;
+  box.hidden = false;
+  requestAnimationFrame(() => box.classList.add('is-open'));
+  const input = $('#search-input');
+  if (initial) input.value = initial;
+  input.focus();
+  input.select();
+  if (initial.trim()) await runSearch();
+  else {
+    $('#search-meta').textContent = '';
+    $('#search-results').textContent = '';
+  }
+}
+
+function closeSearch() {
+  const box = $('#search-view');
+  if (!box) return;
+  box.classList.remove('is-open');
+  setTimeout(() => {
+    box.hidden = true;
+  }, 160);
+}
+
+async function runSearch() {
+  const input = $('#search-input');
+  const q = input.value.trim();
+  const meta = $('#search-meta');
+  const list = $('#search-results');
+
+  if (!q) {
+    meta.textContent = '';
+    list.textContent = '';
+    return;
+  }
+
+  const onlyCurrent = $('#search-current-chat').checked;
+  meta.textContent = '搜索中…';
+  list.textContent = '';
+
+  try {
+    const res = await api.search({
+      q,
+      chat: onlyCurrent ? state.chatId : null,
+      limit: 30,
+    });
+
+    if (!res.results.length) {
+      meta.textContent = res.total ? `共 ${res.total} 条，显示前 0 条` : '没有匹配的消息';
+      return;
+    }
+
+    meta.textContent =
+      `共 ${res.total} 条` + (res.hasMore ? `，下面是最新的 ${res.results.length} 条` : '');
+    renderSearchResults(res.results, q);
+  } catch (ex) {
+    meta.textContent = ex instanceof ApiError ? ex.message : '搜索失败';
+  }
+}
+
+function renderSearchResults(results, query) {
+  const list = $('#search-results');
+  list.textContent = '';
+
+  for (const hit of results) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'search-hit';
+
+    const head = document.createElement('div');
+    head.className = 'search-hit-head';
+    const chat = document.createElement('span');
+    chat.className = 'search-hit-chat';
+    chat.textContent = hit.chatName;
+    const who = document.createElement('span');
+    who.className = 'search-hit-who';
+    const sender = hit.message.sender;
+    who.textContent = sender === 'user' ? '你' : nameOf(sender);
+    const time = document.createElement('span');
+    time.className = 'search-hit-time';
+    time.textContent = new Date(hit.message.createdAt).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    head.append(chat, who, time);
+
+    const snippet = document.createElement('div');
+    snippet.className = 'search-hit-snippet';
+    // snippet 是后端拼好并转义过的，只含 &amp; &lt; 这类实体和 <mark>
+    if (hit.snippet) {
+      snippet.innerHTML = hit.snippet;
+    } else {
+      snippet.textContent = '（这条只有附件）';
+    }
+
+    row.append(head, snippet);
+
+    if (hit.attachmentHits?.length) {
+      const atts = document.createElement('div');
+      atts.className = 'search-hit-atts';
+      atts.textContent = '附件：' + hit.attachmentHits.join('、');
+      row.append(atts);
+    }
+
+    row.addEventListener('click', () => jumpToMessage(hit.message));
+    list.append(row);
+  }
+}
+
+/** 从搜索结果跳到原消息：切会话 → 等加载 → 滚动并高亮。 */
+async function jumpToMessage(message) {
+  closeSearch();
+  if (message.chatId !== state.chatId) {
+    await selectChat(message.chatId);
+  }
+  // 等一帧让消息渲染出来
+  await new Promise((r) => requestAnimationFrame(r));
+  const el = $(`#messages .msg[data-id="${message.id}"]`);
+  if (!el) {
+    toast('这条在更早的历史里，往上翻翻看');
+    return;
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('is-flash');
+  setTimeout(() => el.classList.remove('is-flash'), 1500);
 }
 
 // ── 定时消息 ────────────────────────────────────────────────────────

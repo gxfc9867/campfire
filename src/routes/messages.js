@@ -361,6 +361,66 @@ export function registerMessageRoutes(router, ctx) {
     { auth: 'owner' },
   );
 
+  // ── 全文搜索 ────────────────────────────────────────────────────────
+
+  /** HTML 转义：搜索结果要嵌进 innerHTML，用户搜的内容必须当纯文本处理。 */
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[c]);
+  }
+
+  /** 命中位置前后各截一段，把关键词包进 <mark>。 */
+  function makeSnippet(text, query, radius = 36) {
+    const src = String(text || '');
+    if (!src) return '';
+    const lower = src.toLowerCase();
+    const idx = lower.indexOf(query.toLowerCase());
+    if (idx < 0) return escHtml(src.slice(0, radius * 2));
+    const start = Math.max(0, idx - radius);
+    const end = Math.min(src.length, idx + query.length + radius);
+    const before = (start > 0 ? '…' : '') + src.slice(start, idx);
+    const hit = src.slice(idx, idx + query.length);
+    const after = src.slice(idx + query.length, end) + (end < src.length ? '…' : '');
+    return `${escHtml(before)}<mark>${escHtml(hit)}</mark>${escHtml(after)}`;
+  }
+
+  router.get(
+    '/api/search',
+    (req, res, url) => {
+      const q = String(url.searchParams.get('q') || '').trim();
+      const chatId = url.searchParams.get('chat') || null;
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 30, 1), 100);
+
+      if (!q) {
+        return sendJson(res, 200, { query: '', total: 0, hasMore: false, results: [] });
+      }
+
+      const { items, hasMore } = store.searchMessages({ query: q, chatId, limit });
+      const total = store.countSearch(q, chatId);
+      const lowerQ = q.toLowerCase();
+
+      const results = items.map((m) => {
+        const chat = store.getChat(m.chatId);
+        const atts = Array.isArray(m.attachments) ? m.attachments : [];
+        return {
+          message: m,
+          chatName: chat?.name || m.chatId,
+          snippet: makeSnippet(m.text, q),
+          // 附件名命中单独列出来，正文片段里不会出现它
+          attachmentHits: atts.filter((a) => String(a.name || '').toLowerCase().includes(lowerQ)).map((a) => a.name),
+        };
+      });
+
+      sendJson(res, 200, { query: q, total, hasMore, results });
+    },
+    { auth: 'owner' },
+  );
+
   // ── 附件上传与下载 ──────────────────────────────────────────────────
 
   /**

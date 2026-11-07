@@ -208,6 +208,34 @@
       </div>
     </div>
 
+    <!-- 搜索消息 -->
+    <div class="overlay overlay-sheet" id="search-view" hidden>
+      <div class="sheet sheet-narrow">
+        <header class="sheet-head">
+          <h2>搜索消息</h2>
+          <button class="icon-btn" id="btn-close-search" aria-label="关闭">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <div class="field">
+            <input
+              id="search-input"
+              type="search"
+              placeholder="输入关键词，回车搜索"
+              autocomplete="off"
+            />
+            <label class="search-scope">
+              <input type="checkbox" id="search-current-chat" checked />
+              <span>只搜当前会话</span>
+            </label>
+          </div>
+          <div class="search-meta" id="search-meta"></div>
+          <div class="search-results" id="search-results"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- 定时消息 -->
     <div class="overlay overlay-sheet" id="schedules" hidden>
       <div class="sheet sheet-narrow">

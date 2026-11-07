@@ -367,6 +367,62 @@ export class Store {
     return rows.map(mapMessage);
   }
 
+  // ── 全文搜索 ────────────────────────────────────────────────────────
+
+  /**
+   * 搜消息。
+   *
+   * 用 LIKE 而不是 FTS5：实测下来 FTS5 的两个分词器对中文都不合用——
+   * `unicode61` 把整句当一个词（搜「修伞」搜不到「修伞的老头」），
+   * `trigram` 要求关键词至少 3 个字符（两字词直接失效）。
+   * 围炉是单机个人场景，消息量在几万条以内，LIKE 全表扫描几十毫秒就回来了，
+   * 换 FTS 的复杂度不值得。以后真到十万条以上再考虑加索引。
+   *
+   * 搜的范围：消息正文 + 附件文件名（attachments 是 JSON，直接 LIKE 也能命中）。
+   */
+  searchMessages({ query, chatId = null, limit = 30, before = null }) {
+    const q = String(query || '').trim();
+    if (!q) return { items: [], hasMore: false };
+
+    // LIKE 里 % _ \ 是有特殊含义的，用户搜「100%」不能变成通配
+    const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const pattern = `%${escaped}%`;
+
+    const params = [];
+    let where = "(text LIKE ? ESCAPE '\\' OR attachments LIKE ? ESCAPE '\\')";
+    params.push(pattern, pattern);
+    if (chatId) {
+      where += ' AND chat_id = ?';
+      params.push(chatId);
+    }
+    if (before) {
+      where += ' AND seq < ?';
+      params.push(before);
+    }
+
+    const rows = this.db
+      .prepare(`SELECT * FROM messages WHERE ${where} ORDER BY seq DESC LIMIT ?`)
+      .all(...params, Math.min(Math.max(Number(limit) || 30, 1), 100) + 1);
+
+    const hasMore = rows.length > limit;
+    return { items: rows.slice(0, limit).map(mapMessage), hasMore };
+  }
+
+  /** 搜索命中数（结果页显示「共 N 条」）。 */
+  countSearch(query, chatId = null) {
+    const q = String(query || '').trim();
+    if (!q) return 0;
+    const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const pattern = `%${escaped}%`;
+    const params = [pattern, pattern];
+    let where = "(text LIKE ? ESCAPE '\\' OR attachments LIKE ? ESCAPE '\\')";
+    if (chatId) {
+      where += ' AND chat_id = ?';
+      params.push(chatId);
+    }
+    return this.db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE ${where}`).get(...params).n;
+  }
+
   // ── 附件上传记录 ────────────────────────────────────────────────────
 
   createUpload({ id, chatId, uploader, name, mime, size, path: filePath, width = null, height = null }) {

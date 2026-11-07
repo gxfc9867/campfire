@@ -71,6 +71,13 @@ export const api = {
   exportChatUrl: (id, format = 'md') =>
     `/api/chats/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
 
+  // 搜索
+  search: ({ q, chat = null, limit = 30 }) => {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    if (chat) params.set('chat', chat);
+    return request(`/api/search?${params.toString()}`);
+  },
+
   // 附件
   uploadFile: async (file, chat) => {
     const res = await fetch('/api/uploads', {
