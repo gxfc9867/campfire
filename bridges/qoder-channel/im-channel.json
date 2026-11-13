@@ -1,0 +1,24 @@
+{
+  "category": "im",
+  "protocolVersion": 4,
+  "kind": "campfire",
+  "platform": "campfire",
+  "entry": "dist/worker.mjs",
+  "presentation": {
+    "name": {
+      "default": "Campfire",
+      "translations": { "zh-CN": "围炉" }
+    },
+    "setup": {
+      "scan": {
+        "description": {
+          "default": "Enter your Campfire server URL and channel token.",
+          "translations": { "zh-CN": "填写围炉服务地址与渠道令牌（cf_ 开头）。" }
+        }
+      }
+    }
+  },
+  "sessionTools": {
+    "autoApprove": ["campfire_send_message"]
+  }
+}

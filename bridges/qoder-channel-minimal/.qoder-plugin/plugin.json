@@ -1,0 +1,11 @@
+{
+  "name": "campfire-channel",
+  "version": "0.2.1",
+  "displayName": "围炉 Campfire",
+  "description": "围炉（Campfire）自托管群聊的 Qoder 技能：查看群消息、以成员身份发言、管理成员与群。后续版本将提供 IM 渠道自动接入。",
+  "author": { "name": "campfire" },
+  "homepage": "https://github.com/gxfc9867/campfire",
+  "license": "MIT",
+  "keywords": ["qoder-plugin", "im", "campfire", "围炉", "chat"],
+  "skills": ["./skills"]
+}

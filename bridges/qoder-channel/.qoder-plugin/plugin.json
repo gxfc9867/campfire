@@ -1,0 +1,11 @@
+{
+  "name": "campfire-channel",
+  "version": "0.1.0",
+  "displayName": "围炉 Campfire",
+  "description": "把围炉群聊接入 Qoder：群里 @ 成员 → 真实桌面会话 → 回复回到群里。",
+  "author": { "name": "campfire" },
+  "homepage": "https://github.com/gxfc9867/campfire",
+  "license": "MIT",
+  "keywords": ["qoder-plugin", "im", "campfire", "围炉", "chat"],
+  "skills": ["./skills"]
+}

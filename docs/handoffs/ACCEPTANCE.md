@@ -22,7 +22,7 @@
 
 ```bash
 # ── PC 上执行（会提示输 NAS 密码）──────────────────────────────
-scp J:/campfire/campfire-nas.tar.gz gxfc9867@192.168.31.252:/vol2/@appdata/
+scp J:/campfire/campfire-nas.tar.gz gxfc9867@<NAS_IP>:/vol2/@appdata/
 ```
 
 ```bash
@@ -40,7 +40,7 @@ curl -s localhost:8099/api/health
 # 期望：{"ok":true,...,"version":"0.2.x",...}
 ```
 
-浏览器打开 `http://192.168.31.252:8099`，用上面的口令登录。
+浏览器打开 `http://<NAS_IP>:8099`，用上面的口令登录。
 
 > ⚠️ 两个坑：
 > - NAS 首次 build 要拉 `node:22-alpine` 镜像，慢一点正常。
@@ -56,16 +56,16 @@ curl -s localhost:8099/api/health
 
 ```bash
 # 登录拿 cookie
-curl -s -c /tmp/cf.txt -X POST http://192.168.31.252:8099/api/login \
+curl -s -c /tmp/cf.txt -X POST http://<NAS_IP>:8099/api/login \
   -H 'content-type: application/json' -d '{"password":"<口令>"}'
 
 # 建成员（driver 不填，默认 pull；key 只返回这一次）
-curl -s -b /tmp/cf.txt -X POST http://192.168.31.252:8099/api/members \
+curl -s -b /tmp/cf.txt -X POST http://<NAS_IP>:8099/api/members \
   -H 'content-type: application/json' \
   -d '{"handle":"<handle>","display":"<显示名>","chats":["main"]}'
 
 # 建渠道令牌（token 只返回这一次，立刻记下）
-curl -s -b /tmp/cf.txt -X POST http://192.168.31.252:8099/api/admin/channels \
+curl -s -b /tmp/cf.txt -X POST http://<NAS_IP>:8099/api/admin/channels \
   -H 'content-type: application/json' \
   -d '{"member":"<handle>","name":"<handle>-bridge"}'
 ```
@@ -95,7 +95,7 @@ plugin_manager action=install_bundle target=J:\campfire\plugins\dsh-campfire
 
 ```json
 {
-  "baseUrl": "http://192.168.31.252:8099",
+  "baseUrl": "http://<NAS_IP>:8099",
   "token": "<第二步拿到的渠道 token>",
   "memberHandle": "<gongxi 或 facai>",
   "chatIds": ["main"],
@@ -125,7 +125,7 @@ plugin_manager action=install_bundle target=J:\campfire\plugins\dsh-campfire
 在 `J:\campfire\.env` 写（`.env.example` 有完整注释）：
 
 ```ini
-CAMPFIRE_BASE_URL=http://192.168.31.252:8099
+CAMPFIRE_BASE_URL=http://<NAS_IP>:8099
 CAMPFIRE_CHANNEL_TOKEN=<ruyi 的渠道 token>
 CAMPFIRE_MEMBER=ruyi
 WORKBUDDY_TOKEN_FILE=C:/Users/卿/.campfire/secrets/workbuddy-bearer.txt

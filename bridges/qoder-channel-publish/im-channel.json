@@ -1,0 +1,24 @@
+{
+  "category": "im",
+  "protocolVersion": 4,
+  "kind": "campfire",
+  "platform": "campfire",
+  "entry": "dist/worker.mjs",
+  "presentation": {
+    "name": {
+      "default": "Campfire",
+      "translations": { "zh-CN": "围炉" }
+    },
+    "setup": {
+      "scan": {
+        "description": {
+          "default": "In a Qoder chat, say \"configure Campfire\" and provide the server URL, channel token and member handle.",
+          "translations": { "zh-CN": "在 Qoder 会话里说「配置围炉」，提供围炉服务地址、渠道令牌（cf_ 开头）与成员 handle。" }
+        }
+      }
+    }
+  },
+  "sessionTools": {
+    "autoApprove": ["campfire_send_message"]
+  }
+}

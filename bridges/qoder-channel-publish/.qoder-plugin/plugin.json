@@ -1,0 +1,11 @@
+{
+  "name": "campfire-channel",
+  "version": "0.2.1",
+  "displayName": "围炉 Campfire",
+  "description": "把自托管的围炉群聊接入 Qoder：群里 @ 成员 → 真实桌面会话 → 回复自动回到群里。与官方企业微信渠道同构的 IM 渠道插件。",
+  "author": { "name": "campfire" },
+  "homepage": "https://github.com/gxfc9867/campfire",
+  "license": "MIT",
+  "keywords": ["qoder-plugin", "im", "communication", "campfire", "围炉", "chat"],
+  "skills": ["./skills"]
+}

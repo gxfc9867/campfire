@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "campfire": {
+      "command": "${QODER_NODE_RUNTIME}",
+      "args": ["${QODER_PLUGIN_ROOT}/dist/worker.mjs"],
+      "env": {
+        "QODER_CHANNEL_KIND": "campfire",
+        "QODER_CHANNEL_DATA": "${QODER_PLUGIN_DATA}"
+      },
+      "_meta": {
+        "com.qoder/runtimeOwner": "qoder.communication"
+      }
+    }
+  }
+}
