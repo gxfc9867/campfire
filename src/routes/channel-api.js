@@ -236,10 +236,23 @@ export function registerChannelRoutes(router, ctx) {
       }));
 
       const nextCursor = items.length ? items[items.length - 1].seq : cursor;
+      // 当前群成员名单：让接入方每次都能拿到最新 handle/显示名。
+      // 少了这个，agent 只能靠自己的会话历史猜名字——成员重建/改名后就会 @ 到旧名，
+      // 消息投不出去（实测：恭喜一直 @gpt10，而 gpt10 已被删，gpt 收不到）。
+      let roster = [];
+      try {
+        roster = (store.listMembersOf?.(chatId) || [])
+          .map((h) => members.get(h))
+          .filter(Boolean)
+          .map((m) => ({ handle: m.handle, display: m.display || m.handle, aliases: m.aliases || [] }));
+      } catch {
+        roster = [];
+      }
       sendJson(res, 200, {
         updates,
         nextCursor,
         hasMore,
+        members: roster,
         serverTime: Date.now(),
       });
     },
@@ -293,7 +306,23 @@ export function registerChannelRoutes(router, ctx) {
        * 落库了，投递是附加动作。
        */
       try {
-        ctx.deliverToMembers?.({ chatId, messageId: msg.id, text, sender: member });
+        // 回复某条消息时，即使正文没写 @，也要把它投递给被回复的人。
+        // 否则「agent 回复了主人/另一个成员」对方永远收不到（恭喜收不到 gpt 回复就是这个）。
+        // 只影响投递用的文本，不改已落库的原文。
+        let deliverText = text;
+        if (body.replyTo) {
+          try {
+            const q = store.getMessage?.(String(body.replyTo));
+            if (q && q.sender && q.sender !== member && q.sender !== SENDER.user && q.sender !== SENDER.system) {
+              const qm = members.get(q.sender);
+              const tag = qm?.display || qm?.handle || q.sender;
+              if (tag && !deliverText.includes('@' + tag)) deliverText = '@' + tag + ' ' + deliverText;
+            }
+          } catch {
+            // 取不到被回复消息就不补，不影响正常投递
+          }
+        }
+        ctx.deliverToMembers?.({ chatId, messageId: msg.id, text: deliverText, sender: member });
       } catch (error) {
         // 记录但不让发送失败
       }

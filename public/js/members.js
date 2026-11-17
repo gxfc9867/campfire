@@ -345,21 +345,41 @@ async function probeMember() {
 async function openConnect(handle, key) {
   const member = state.members.find((m) => m.handle === handle);
   const driverType = member?.driverType || member?.driver?.type || 'pull';
+  const adapter = member?.driver?.adapter || '';
   connect = {
     handle,
     key: key || '',
     name: member?.display || handle,
     driverType,
+    adapter,
     timer: null,
     shown: false,
   };
 
   $('#connect-name').textContent = connect.name;
+  // 接入目标下拉：优先用成员保存时的 adapter；否则用本地记住的选择；再否则默认 DSH。
+  // 记住选择是为了避免"建成员时没选 adapter → 每次打开都错回 DSH 引导"。
+  const targetSel = $('#connect-target');
+  const prefKey = 'cf-connect-target:' + handle;
+  let savedPref = '';
+  try { savedPref = localStorage.getItem(prefKey) || ''; } catch { /* 忽略隐私模式 */ }
+  const initialTarget = adapter === 'codex-desktop' ? 'codex-desktop' : (savedPref === 'codex-desktop' ? 'codex-desktop' : 'dsh');
+  connect.adapter = initialTarget === 'codex-desktop' ? 'codex-desktop' : '';
+  if (targetSel) {
+    targetSel.value = initialTarget;
+    targetSel.onchange = () => {
+      connect.adapter = targetSel.value === 'codex-desktop' ? 'codex-desktop' : '';
+      try { localStorage.setItem(prefKey, targetSel.value); } catch { /* 忽略 */ }
+      renderConnect();
+    };
+  }
   $('#member-connect').hidden = false;
-  const waitingText =
-    driverType === 'pull'
+  const isCodex = (adapter === 'codex-desktop') || (initialTarget === 'codex-desktop');
+  const waitingText = isCodex
+    ? '还没连上来 · 在 GPT 里发一次配置，看到「配好了」后这里会自动变绿'
+    : (driverType === 'pull'
       ? '插件还没连上来 · 在 DSH 里填好三项并重启后，这里会自动变绿'
-      : '等待成员连上来…';
+      : '等待成员连上来…');
   setConnectState('waiting', member?.presence?.reachable ? '正在确认状态…' : waitingText);
 
   // 密钥可能没随列表下发明文，单独取一次；失败就留空让用户点「显示」重试
@@ -538,13 +558,93 @@ function renderConnect() {
 
   if (connect.driverType === 'llm') {
     renderConnectForLlm();
-    // 成员密钥是「外部进程来认领身份」用的，桥内直连的成员根本用不上，藏掉免得误导
     $('.connect-key').hidden = true;
     return;
   }
-  // pull 驱动走渠道令牌 + /v1 接口（DSH 插件、WorkBuddy 桥）
-  // 走到这里只可能是 pull；其它类型已经在上面 return 了
+  // GPT 桌面端：配置码一步接入
+  if (connect.adapter === 'codex-desktop') {
+    renderConnectForCodex();
+    return;
+  }
+  // 其它 pull 成员走通用渠道令牌引导（DSH 插件、WorkBuddy 桥）
   renderConnectForDsh();
+}
+
+/** GPT 桌面端专用引导：把地址/令牌/成员名打包成一段配置码，用户复制粘贴即可。 */
+function renderConnectForCodex() {
+  $('#connect-ready').hidden = true;
+  $('#connect-dsh').hidden = true;
+  $('#connect-codex').hidden = false;
+  $('.connect-key').hidden = true;
+  const genBtn = $('#btn-gen-codex-token');
+  if (genBtn) {
+    genBtn.onclick = async () => {
+      genBtn.disabled = true;
+      try {
+        const res = await api.createChannel(connect.handle, `${connect.name}-gpt`);
+        freshChannelToken = res.token || '';
+        updateCodexCode();
+        toast('配置码已生成，复制它');
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        genBtn.disabled = false;
+      }
+    };
+  }
+  updateCodexCode();
+}
+
+/** 生成「一整段发给 GPT 的话」：触发 skill 的指令 + 配置码，用户一键复制粘贴即可。 */
+function updateCodexCode() {
+  const pre = $('#connect-codex-code');
+  if (!pre) return;
+  const copyBtn = $('#btn-copy-codex-code');
+  if (!freshChannelToken) {
+    pre.textContent = '（点下面「生成 / 重新生成」后，这里会出现一段可以整段复制发给 GPT 的话）';
+    if (copyBtn) copyBtn.disabled = true;
+    return;
+  }
+  const payload = {
+    v: 1,
+    kind: 'codex-desktop',
+    base: publicBase(),
+    token: freshChannelToken,
+    member: connect.handle,
+  };
+  try {
+    // UTF-8 -> base64 -> URL-safe
+    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    const code = 'campfire://setup?' + btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    // 一整段：触发 skill 的话 + 明文地址/成员名（给人核对）+ 配置码（唯一执行依据）。
+    // 明确要求"把当前会话接进去"，对应 skill 传 --memberThread。
+    const message =
+      '$campfire-setup 帮我把围炉接到当前这条会话。\n' +
+      '围炉地址：' + publicBase() + '\n' +
+      '成员名：' + connect.handle + '\n' +
+      '（上面两项只是给你核对；令牌在下面的配置码里，不用单独发我）\n' +
+      '请把当前会话作为「围炉成员会话」（群里 @它的消息进这里），' +
+      '只用下面这串配置码完成配置和启动，整串原样传给配置脚本，' +
+      '不要拆成地址/令牌/成员名，也不要改动它：\n' +
+      code;
+    pre.textContent = message;
+    if (copyBtn) {
+      copyBtn.disabled = false;
+      copyBtn.onclick = () => copyText(message, copyBtn);
+    }
+    // 备用：终端命令（配置码内嵌，命令里不出现明文令牌）
+    const cmdBox = $('#cx-way-c');
+    if (cmdBox) {
+      const q = code.includes("'") ? code.replace(/'/g, "'\\''") : code;
+      cmdBox.textContent =
+        'Windows(PowerShell):  node "<插件目录>/adapter/configure.mjs" --code \'' + code + '\'\n' +
+        'Mac / Linux:          node "<插件目录>/adapter/configure.mjs" --code \'' + q + '\'';
+    }
+  } catch (e) {
+    pre.textContent = '生成失败：' + e.message;
+  }
 }
 
 function publicBase() {
@@ -733,6 +833,7 @@ async function openEditor(handle) {
       : '';
   }
   form.elements.url.value = driver.url || '';
+  if (form.elements.adapter) form.elements.adapter.value = driver.adapter || '';
 
   await ensureProviders();
   fillProviderOptions(driver.provider);
@@ -891,6 +992,9 @@ function syncDriverFields() {
   const type = $$('input[name="driverType"]').find((r) => r.checked)?.value || 'pull';
   $('#webhook-fields').hidden = type !== 'webhook';
   $('#llm-fields').hidden = type !== 'llm';
+  // 只有 pull 成员才谈「接哪个 agent」
+  const adapterField = $('#agent-adapter-field');
+  if (adapterField) adapterField.hidden = type !== 'pull';
   // llm 型点一下是真的打一次模型接口，比「通道检查」有用得多，所以按钮文案跟着换
   const probe = $('#btn-probe');
   if (probe) probe.textContent = type === 'llm' ? '测一下模型' : '测试连接';
@@ -948,6 +1052,7 @@ async function save(e) {
 
   const type = $$('input[name="driverType"]').find((r) => r.checked)?.value || 'pull';
   const driver = { type };
+  if (type === 'pull' && form.elements.adapter?.value) driver.adapter = form.elements.adapter.value;
   if (type === 'webhook') {
     if (!/^https?:\/\//.test(form.elements.url.value.trim())) return fail('回调地址需以 http(s):// 开头');
     driver.url = form.elements.url.value.trim();

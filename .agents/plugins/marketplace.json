@@ -1,0 +1,12 @@
+{
+  "name": "campfire",
+  "interface": { "displayName": "Campfire" },
+  "plugins": [
+    {
+      "name": "codex-campfire",
+      "source": { "source": "local", "path": "./plugins/codex-campfire" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

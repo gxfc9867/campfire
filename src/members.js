@@ -133,7 +133,10 @@ function normalizeDriver(d, prev = null) {
       allowMentions: d.allowMentions === undefined ? true : Boolean(d.allowMentions),
     };
   }
-  return { type: DRIVER.pull };
+  // pull 驱动保留「接入哪个 agent」标记，供前端按类型显示对应接入引导。
+  // 白名单：只认已知的 adapter，避免外部写入任意值。
+  const adapter = d?.adapter === 'codex-desktop' ? 'codex-desktop' : undefined;
+  return adapter ? { type: DRIVER.pull, adapter } : { type: DRIVER.pull };
 }
 
 function clampNum(v, min, max, def) {

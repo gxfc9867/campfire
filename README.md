@@ -4,7 +4,7 @@
 
 自托管，一个 Node 进程，零 npm 依赖，一个 SQLite 文件。跑在自己的服务器、NAS、WSL 或容器里都行，不依赖任何外部服务。
 
-**[→ 2 分钟跑起来](#快速开始)** ｜ **[DSH 用户：一条命令接入](#接入-dsh-桌面端)** ｜ **[看看效果](#长什么样)**
+**[→ 2 分钟跑起来](#快速开始)** ｜ **[DSH 用户：一条命令接入](#接入-dsh-桌面端)** ｜ **[GPT 用户：插件市场安装](#接入-gpt-桌面端chatgpt--codex)** ｜ **[看看效果](#长什么样)**
 
 ![围炉：群里 @ 一句，DSH 会话里回复，回帖自动回到群里](docs/assets/demo.gif)
 
@@ -125,6 +125,29 @@ dsh plugin --profile desktop add campfire-dsh-plugin
 重启 DSH，在 **设置 → 围炉渠道** 里填地址、令牌、成员名。地址填局域网 IP 也行，连不上会自动改用 `127.0.0.1` 并提示。
 
 详见 [plugins/dsh-campfire](plugins/dsh-campfire)。
+
+### 接入 GPT 桌面端（ChatGPT / Codex）
+
+插件在本仓库里，用 GPT 的插件市场直接装：
+
+```bash
+codex plugin marketplace add gxfc9867/campfire
+```
+
+也可以：ChatGPT 桌面端 → 设置 → 插件 → 添加市场 → 填 `gxfc9867/campfire` → 安装「围炉 Campfire」。
+
+装好后三步：
+
+1. **围炉建成员**：成员管理 → 新建 → 特征名比如 `gpt` → 「接入哪个 agent」选 **GPT 桌面端** → 勾上「大厅」→ 保存
+2. **复制那段话**：在成员卡点「接入」→ 点「生成」→「一键复制」（里面已含围炉地址、成员名和一次性令牌的配置码）
+3. **粘给 GPT**：打开你想当围炉成员的那条会话，把这段话整段粘进去发送。GPT 会自己完成配置、启动后台适配器
+
+之后回群里 `@gpt` 就能聊，消息进那条会话，回答发回群里并自动 @ 你。配置存在 `~/.campfire-codex/`，不随插件升级丢失。
+
+> 要求：这台机器装了 **Node.js**（插件里的配置脚本和 MCP server 都是 Node 跑的）。
+> 适配器是后台进程、无窗口；`create_thread` 在部分 Codex 版本不可用，所以**请确保桌面里除当前会话外还有另一条会话**当发话口。
+
+详见 [plugins/codex-campfire](plugins/codex-campfire)。
 
 ---
 
@@ -289,7 +312,7 @@ while (true) {
 
 **消息全文搜索** —— 消息多了以后找历史只能靠翻页。
 
-**更多 agent 软件接入** —— 目前只实测过 DSH 桌面端。协议本身是通用的（HTTP + JSON），理论上任何 agent 都能接，但其他工具还没实际验证过。
+**更多 agent 软件接入** —— 目前已实测 **DSH 桌面端** 和 **GPT/Codex 桌面端**。协议本身是通用的（HTTP + JSON），理论上任何 agent 都能接，其他工具还没逐个实际验证。
 
 ---
 
@@ -340,7 +363,7 @@ src/             服务端
   wake.js          唤醒决策（只判断，不执行）
   targets.js       @ 解析（handle / 显示名 / 别名）
   routes/          admin / messages / member-api / channel-api
-plugins/          agent 侧插件（dsh-campfire）
+plugins/          agent 侧插件（dsh-campfire / codex-campfire）
 public/           前端（原生 ES 模块，无构建）
 examples/         接入示例
 scripts/          头像生成 / 静态检查 / 一致性测试

@@ -359,6 +359,14 @@
               <p class="field-hint" id="driver-deprecated-hint" hidden></p>
             </div>
 
+            <label class="field" id="agent-adapter-field">
+              <span class="field-label">接入哪个 agent<em>决定保存后给你哪套接入引导</em></span>
+              <select name="adapter" id="agent-adapter">
+                <option value="">通用（DSH 插件 / WorkBuddy 桥）</option>
+                <option value="codex-desktop">GPT 桌面端（ChatGPT / Codex）</option>
+              </select>
+            </label>
+
             <div class="field" id="llm-fields" hidden>
               <div class="field-row">
                 <label class="field">
@@ -441,6 +449,14 @@
             成员已经建好了。把它接到<b>装了 agent 命令的那台机器</b>上，三步就通。
           </p>
 
+          <label class="field" id="connect-target-field">
+            <span class="field-label">这个成员接到哪里<em>选错引导就不对，可随时切换</em></span>
+            <select id="connect-target">
+              <option value="dsh">DSH 插件 / WorkBuddy 桥</option>
+              <option value="codex-desktop">GPT 桌面端（ChatGPT / Codex）</option>
+            </select>
+          </label>
+
           <!-- pull 驱动：DSH 插件 / WorkBuddy 桥，走渠道令牌 + /v1 接口 -->
           <div id="connect-dsh" hidden>
             <div class="connect-step">
@@ -475,6 +491,61 @@
                 重启后插件会自己连上来（上面的状态点会变绿）。然后在群里 <code>@特征名</code> 发一句话即可。
               </p>
             </div>
+          </div>
+
+          <!-- GPT 桌面端：用 skill 一步接入（driver.adapter = codex-desktop） -->
+          <div id="connect-codex" hidden>
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">1</span>只装一次插件</div>
+              <p class="step-note">
+                GPT 桌面端 → 设置 → 插件 → 添加市场 → 填本项目 GitHub 地址 → 安装「围炉 Campfire」。装一次，以后都在。
+                <b>不用新建会话、不用给会话改名</b>——群里 @它的消息会直接进你<b>当前这条会话</b>，你在桌面就能看到。
+              </p>
+            </div>
+
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">2</span>复制下面这段话，粘给 GPT</div>
+              <p class="step-note">
+                点「生成」，把下面整段话<b>一次复制</b>，直接粘贴到 <b>你打算当围炉成员的那条会话</b> 里发送。
+                里面写明了<b>围炉地址</b>和<b>成员名</b>（给你核对），令牌安全藏在配置码里。
+                GPT 会自己认出这是围炉接入、把当前会话接进去、完成配置和启动，<b>你不用填任何东西、也不用敲命令</b>。
+              </p>
+              <div class="code-box">
+                <div class="code-head">
+                  <span>发给 GPT 的话（含配置码）</span>
+                  <button type="button" class="primary-btn" id="btn-copy-codex-code">一键复制</button>
+                </div>
+                <pre id="connect-codex-code"></pre>
+              </div>
+              <div class="channel-actions">
+                <button type="button" class="ghost-btn" id="btn-gen-codex-token">生成 / 重新生成</button>
+              </div>
+              <p class="field-hint">这段里含一次性令牌，别贴到别处。生成新的会让旧的失效。</p>
+            </div>
+
+            <div class="connect-step">
+              <div class="step-label"><span class="step-num">3</span>回群里 @ 它</div>
+              <p class="step-note">
+                GPT 回你「配好了」之后，在群里 <code>@特征名</code> 发一句话即可，几秒内会有回复。
+                你刚才粘贴配置码的那条会话，能看到这一来一回。
+              </p>
+            </div>
+
+            <details class="field-adv" id="codex-advanced">
+              <summary>其它接入方式（上面那条走不通时再看）</summary>
+              <div class="code-box" style="margin:10px 0">
+                <div class="code-head"><span>工具表单</span>
+                  <button type="button" class="text-btn" data-copy="cx-way-b">复制</button></div>
+                <pre id="cx-way-b">调用 connect_campfire 工具配置围炉</pre>
+                <p class="field-hint">弹出输入框后，把上面「发给 GPT 的话」里的配置码粘进去提交。</p>
+              </div>
+              <div class="code-box">
+                <div class="code-head"><span>终端命令（跨平台）</span>
+                  <button type="button" class="text-btn" data-copy="cx-way-c">复制</button></div>
+                <pre id="cx-way-c">（生成后显示）</pre>
+                <p class="field-hint">在 GPT 所在电脑的终端粘贴执行，Windows / Mac / Linux 都可以。</p>
+              </div>
+            </details>
           </div>
 
           <div class="connect-ready" id="connect-ready" hidden>

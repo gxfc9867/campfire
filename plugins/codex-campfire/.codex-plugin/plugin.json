@@ -1,0 +1,20 @@
+{
+  "name": "codex-campfire",
+  "version": "0.3.0",
+  "description": "把你的 GPT 桌面会话接进围炉群聊。装好后点插件的「围炉设置」，粘贴一段配置码即可，之后随 GPT 自动运行。",
+  "author": { "name": "facai" },
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "keywords": ["campfire", "围炉", "group-chat", "adapter"],
+  "interface": {
+    "displayName": "围炉 Campfire",
+    "shortDescription": "把 GPT 接进围炉群聊，配置一次，随后自动运行",
+    "longDescription": "安装后在对话框输入 $campfire-setup 或在插件详情页点提示按钮，按引导粘贴围炉生成的配置码即可完成接入。适配器会随 GPT 自动在后台启动，不弹黑窗口。",
+    "developerName": "facai",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["$campfire-setup"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "campfire": {
+      "command": "node",
+      "cwd": ".",
+      "args": ["./mcp/server.mjs"],
+      "enabled": true,
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 120,
+      "env_vars": ["HOME", "USERPROFILE", "CODEX_HOME", "CAMPFIRE_CONFIG_DIR", "PATH"]
+    }
+  }
+}
