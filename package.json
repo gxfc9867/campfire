@@ -1,6 +1,6 @@
 {
   "name": "campfire",
-  "version": "0.2.0",
+  "version": "2.1.0",
   "description": "围炉 —— 自托管的多成员 AI 群聊中枢，成员可被唤醒、可休眠、可自带人设与记忆",
   "type": "module",
   "engines": {
